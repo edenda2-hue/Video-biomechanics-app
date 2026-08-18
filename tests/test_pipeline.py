@@ -133,6 +133,32 @@ def test_warp_basic():
           result[10, 10, 3] == 0)
 
 
+def test_warp_collinear_points_dont_shred():
+    """Regression test: a fully-extended-limb pose (e.g. a front lever,
+    arm straight overhead) puts a 3-point muscle's shoulder/elbow/wrist
+    control points almost exactly on one line. TPS is defined for that but
+    extrapolates unboundedly for source content off the line, which was
+    observed to shred a wide muscle cutout into repeated stretched strips.
+    warp_onto_canvas should detect this and fall back to a rigid
+    similarity transform instead, keeping the source content intact."""
+    src = np.zeros((100, 200, 4), dtype=np.uint8)
+    src[20:80, 20:180] = (0, 0, 255, 255)  # wide opaque red band, BGR
+    # source control points collinear along the horizontal midline
+    source_points = [(30.0, 50.0), (100.0, 50.0), (170.0, 50.0)]
+    # target points also collinear, but much longer (simulating a fully
+    # extended limb far larger on-screen than the source drawing)
+    target_points = [(100.0, 100.0), (100.0, 300.0), (100.0, 500.0)]
+
+    result = warp_onto_canvas(src, source_points, target_points, canvas_size=(400, 640))
+    opaque_fraction = (result[..., 3] > 100).sum() / result[..., 3].size
+    # A shredded/exploded warp leaves either almost nothing (content
+    # scattered to invisibly-thin slivers) or implausibly much (runaway
+    # extrapolation) opaque; a sane rigid transform of a solid band keeps
+    # a moderate, bounded fraction of the canvas opaque.
+    check("collinear control points don't shred the source into slivers/blowup",
+          0.02 < opaque_fraction < 0.5, detail=f"opaque_fraction={opaque_fraction:.4f}")
+
+
 def test_muscle_library():
     lib = MuscleLibrary.load()
     all_muscles = lib.all()
@@ -236,6 +262,7 @@ def test_video_segment_pipeline():
 def main() -> int:
     for fn in [
         test_joint_angles, test_torso_yaw, test_occlusion, test_warp_basic,
+        test_warp_collinear_points_dont_shred,
         test_muscle_library, test_overlay_build_with_placeholders,
         test_pose_model_loads_and_runs, test_video_segment_pipeline,
     ]:

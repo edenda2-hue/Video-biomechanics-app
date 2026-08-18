@@ -7,9 +7,8 @@ input/*
 output/
 assets/anatomy/source/*
 !assets/anatomy/source/.gitkeep
-assets/anatomy/muscles/*.png
-!assets/anatomy/muscles/.gitkeep
-!assets/anatomy/muscles/*.json
+# assets/anatomy/muscles/*.png cutouts ARE tracked once curated -- they're
+# the actual deliverable, not scratch output.
 *.mp4
 *.mov
 *.avi

@@ -3,12 +3,20 @@ points) and deform it so those control points land on a target set of
 pose-derived pixel coordinates, for *any* muscle and *any* pose — this
 module has no notion of which muscle or exercise it's serving.
 
-- >=3 control points: thin-plate spline (via scipy RBFInterpolator), which
-  is what lets a flat anatomical illustration bend to follow a limb's
-  actual angle in the frame instead of just scaling/rotating rigidly.
-- exactly 2 control points: a similarity transform (rotate + uniform
-  scale + translate) computed analytically, since TPS is undefined/
-  degenerate below 3 points.
+- >=3 well-spread control points: thin-plate spline (via scipy
+  RBFInterpolator), which is what lets a flat anatomical illustration bend
+  to follow a limb's actual angle in the frame instead of just
+  scaling/rotating rigidly.
+- exactly 2 control points, OR >=3 points that are (nearly) collinear: a
+  similarity transform (rotate + uniform scale + translate, no shear/
+  stretch) fit over all the points via cv2.estimateAffinePartial2D. TPS is
+  numerically well-defined for collinear points, but it extrapolates
+  wildly for any source content off that line -- exactly the case for a
+  muscle spanning a fully straightened limb (e.g. triceps on an extended
+  arm: shoulder/elbow/wrist all fall on ~one line), where it was observed
+  to shred the source image into repeated stretched strips. Falling back
+  to a rigid similarity transform whenever the points don't meaningfully
+  span 2D space avoids that failure mode for any muscle/pose combination.
 """
 from __future__ import annotations
 
@@ -16,26 +24,49 @@ import numpy as np
 import cv2
 from scipy.interpolate import RBFInterpolator
 
+# Ratio of minor-to-major spread (via PCA) below which a point set is
+# treated as "collinear enough" that TPS's off-line extrapolation can't be
+# trusted, and a rigid similarity transform is used instead.
+_COLLINEARITY_RATIO = 0.12
+
+
+def _is_nearly_collinear(points: np.ndarray) -> bool:
+    if len(points) < 3:
+        return True
+    centered = points - points.mean(axis=0)
+    singular_values = np.linalg.svd(centered, compute_uv=False)
+    if singular_values[0] < 1e-9:
+        return True
+    return (singular_values[1] / singular_values[0]) < _COLLINEARITY_RATIO
+
 
 def _similarity_transform_matrix(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
-    """2x3 affine matrix mapping src[0]->dst[0], src[1]->dst[1] via a pure
-    rotate+scale+translate (no shear) transform."""
-    (sx0, sy0), (sx1, sy1) = src
-    (dx0, dy0), (dx1, dy1) = dst
+    """2x3 affine matrix mapping src->dst via a pure rotate+scale+translate
+    (no shear) transform, least-squares fit over all point pairs (Umeyama's
+    method -- a closed-form exact fit, unlike cv2.estimateAffinePartial2D's
+    RANSAC/LMEDS estimators, which assume many points with outliers and
+    misbehave on a handful of clean control points)."""
+    n = len(src)
+    mu_src, mu_dst = src.mean(axis=0), dst.mean(axis=0)
+    src_c, dst_c = src - mu_src, dst - mu_dst
 
-    src_vec = complex(sx1 - sx0, sy1 - sy0)
-    dst_vec = complex(dx1 - dx0, dy1 - dy0)
-    if abs(src_vec) < 1e-9:
-        raise ValueError("Degenerate source control points (identical points)")
-    scale_rot = dst_vec / src_vec  # complex number encodes scale * rotation
+    var_src = (src_c ** 2).sum() / n
+    if var_src < 1e-9:
+        raise ValueError("Degenerate source control points (all coincide)")
 
-    a, b = scale_rot.real, scale_rot.imag
-    # [x', y'] = [[a, -b], [b, a]] @ [x - sx0, y - sy0] + [dx0, dy0]
-    m = np.array([
-        [a, -b, dx0 - a * sx0 + b * sy0],
-        [b, a, dy0 - b * sx0 - a * sy0],
+    cov = (dst_c.T @ src_c) / n
+    u, d, vt = np.linalg.svd(cov)
+    s = np.eye(2)
+    if np.linalg.det(u) * np.linalg.det(vt) < 0:
+        s[1, 1] = -1
+    rotation = u @ s @ vt
+    scale = np.trace(np.diag(d) @ s) / var_src
+    translation = mu_dst - scale * rotation @ mu_src
+
+    return np.array([
+        [scale * rotation[0, 0], scale * rotation[0, 1], translation[0]],
+        [scale * rotation[1, 0], scale * rotation[1, 1], translation[1]],
     ], dtype=np.float64)
-    return m
 
 
 def warp_onto_canvas(
@@ -68,8 +99,10 @@ def warp_onto_canvas(
     grid_x, grid_y = np.meshgrid(np.arange(x_min, x_max), np.arange(y_min, y_max))
     out_coords = np.stack([grid_x.ravel(), grid_y.ravel()], axis=1).astype(np.float64)
 
-    if len(source_points) >= 3:
-        src = np.array(source_points, dtype=np.float64)
+    src = np.array(source_points, dtype=np.float64)
+    use_tps = len(source_points) >= 3 and not _is_nearly_collinear(src) and not _is_nearly_collinear(tgt)
+
+    if use_tps:
         # Fit target -> source (inverse mapping), so we can sample source
         # pixels directly for every output pixel (avoids holes from a
         # forward warp).
@@ -78,7 +111,7 @@ def warp_onto_canvas(
         src_x = rbf_x(out_coords).reshape(grid_x.shape).astype(np.float32)
         src_y = rbf_y(out_coords).reshape(grid_y.shape).astype(np.float32)
     else:
-        m_fwd = _similarity_transform_matrix(source_points, target_points)
+        m_fwd = _similarity_transform_matrix(src, tgt)
         m_fwd3 = np.vstack([m_fwd, [0, 0, 1]])
         m_inv = np.linalg.inv(m_fwd3)[:2]
         ones = np.ones((out_coords.shape[0], 1))

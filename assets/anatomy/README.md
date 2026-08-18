@@ -9,7 +9,35 @@ in `pose/`, `compositing/`, or `video/`. Two subfolders:
   from a `source/` plate, plus a `<muscle_id>.json` sidecar of pixel-space
   control points. This is what `compositing/assets.py` actually loads.
 
-## Why nothing is populated yet
+## Current status
+
+6 of 24 catalog entries have curated art: `latissimus_dorsi_{r,l}`,
+`triceps_brachii_{r,l}`, `gluteus_maximus_{r,l}`. Source: an AI-generated
+reference illustration sheet the project owner provided directly (not
+Gray's 1918 -- confirmed with them that they generated it themselves, so
+it's clear to use here; see git history for the exact exchange). It was
+segmented into per-muscle transparent cutouts with
+`scripts/segment_muscle_from_reference.py` (keys on saturation: this
+illustration style draws muscle tissue as saturated red/salmon against
+white background, pale bone, and dark text/labels, so thresholding
+saturation cleanly isolates the muscle from everything else in one pass).
+Bilateral pairs that the reference only drew once were produced as a
+horizontal mirror of the other side (`cv2.flip`) rather than a second
+independent crop -- anatomically valid for paired muscles, and it
+guarantees the two sides are exactly symmetric.
+
+`rectus_abdominis` (and everything else in the catalog) still has no
+curated art and renders as the placeholder described below -- the
+reference sheet didn't include it, and Gray's 1918 is still unreachable
+from this sandbox (see next section).
+
+**Control points for the 6 curated muscles were placed by visual estimate
+on a pixel grid overlay, not clicked interactively** (`pick_control_points.py`
+exists for that but wasn't used this round) -- treat their placement as a
+rough first pass pending the professional-review step below, not a
+verified fit.
+
+## Why Gray's 1918 isn't populated
 
 This project's sandbox blocks the only legitimate source for these
 images. Confirmed during Milestone 1 development (all returned 403 at the
@@ -32,7 +60,7 @@ prototype and rejected them as not organic-looking; a placeholder here
 exists only to keep the *pipeline* testable, never as a stand-in for real
 curation (see below).
 
-## What runs today instead
+## What runs for everything else
 
 `compositing/assets.py` generates a clearly-labeled procedural placeholder
 (a soft, fiber-streaked, watermarked blob) for any muscle without a

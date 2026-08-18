@@ -6,25 +6,28 @@ freezes the video there, fades in an anatomically-placed muscle overlay
 fitted to the detected pose at that exact frame, holds it, then resumes
 playback. General-purpose by design — not built around any one exercise.
 
-**תקציר (עברית):** זהו ה-pipeline הכללי של Milestone 1 — לא פתרון חד-פעמי.
-הוא בנוי ונבדק (ראו "What's validated" למטה), אך שני דברים חסרים כדי
-להריץ אותו על מקרה הבדיקה האמיתי: (1) קובץ הווידאו עדיין לא הועלה
-ל-`input/`, ו-(2) מדיניות הרשת של הסביבה הזו חוסמת את Wikimedia Commons,
-כך שתמונות Gray's Anatomy האמיתיות עדיין לא ירדו — במקומן יש placeholder
-מסומן בבירור. פרטים מלאים בהמשך המסמך (באנגלית) ובקובץ
-`assets/anatomy/README.md`.
+**תקציר (עברית):** ה-pipeline הכללי של Milestone 1 רץ בפועל על מקרה הבדיקה
+האמיתי (`input/test_clip_1.mov` — תרגיל bar hold, עצירה בשנייה 1, השהיה 5
+שניות). 6 מתוך 7 השרירים המבוקשים (Latissimus Dorsi, Triceps Brachii,
+Gluteus Maximus — כל אחד בשני הצדדים) מוצגים כעת עם איור אנטומי אמיתי
+(שסופק ע"י המשתמש, נוצר ב-AI, לא מ-Gray's 1918 בגלל חסימת הרשת ל-Wikimedia
+בסביבה הזו). Rectus Abdominis עדיין placeholder כי לא סופק איור עבורו.
+פרטים מלאים בהמשך המסמך (באנגלית) ובקובץ `assets/anatomy/README.md`.
 
 ## Status: Milestone 1
 
-The general pipeline is built and mechanically validated end-to-end
-(synthetic data + real photos, see "What's validated" below). It has
-**not** been run against the actual test clip described in the project
-brief (static bar-hold exercise, pause at t=1s, 3s freeze, Latissimus
-Dorsi / Triceps Brachii / Rectus Abdominis / Gluteus Maximus), because
-that video hasn't been uploaded to `input/` yet, and it has **not** been
-run with real anatomical art, because this sandbox's network policy blocks
-Wikimedia Commons (see "Network constraints"). Both are blocking, external
-inputs — not open pipeline work.
+The general pipeline has been run end-to-end against the real test clip
+described in the project brief: `input/test_clip_1.mov` (an outdoor bar
+front-lever/hold, 4K portrait, iPhone), paused at t=1s, held for 5s, with
+Latissimus Dorsi / Triceps Brachii / Gluteus Maximus (each bilateral) and
+Rectus Abdominis. 6 of those 7 muscle instances now render with real
+curated anatomical art (see "Anatomical art" below); Rectus Abdominis is
+still the placeholder shape since no source art exists for it yet.
+
+Running the real clip through the real pipeline surfaced (and fixed) a
+genuine bug -- see "Key technical decisions" -- that synthetic test data
+alone hadn't caught, which is exactly why this step mattered before
+calling Milestone 1 done.
 
 ## Architecture
 
@@ -72,7 +75,7 @@ writing code.
 | `muscle_library/catalog.json` | The actual full-body catalog (24 entries: upper body, core, lower body — see below). Data, not code. |
 | `muscle_library/library.py` | Loads the catalog; `resolve()` turns a list of muscle ids and/or group names (`upper_body`/`core`/`lower_body`/`all`) into `MuscleDefinition`s. |
 | `compositing/assets.py` | Loads a muscle's cutout image + control points, or synthesizes a labeled placeholder if the curated asset doesn't exist yet. |
-| `compositing/warp.py` | Warps a source image so its control points land on target (pose-derived) points — thin-plate spline for ≥3 points, similarity transform for exactly 2. |
+| `compositing/warp.py` | Warps a source image so its control points land on target (pose-derived) points — thin-plate spline for ≥3 well-spread points, similarity transform (2 points, or ≥3 nearly-collinear ones) otherwise. |
 | `compositing/occlusion.py` | Continuous opacity from the angle between the camera's viewing axis and each muscle's estimated body-surface normal (derived from torso yaw + the muscle's declared facing) — not a per-exercise rule. |
 | `compositing/overlay.py` | Combines warped, opacity-adjusted muscles into one RGBA layer per pose frame, and alpha-composites that layer onto a video frame at a given fade level. |
 | `video/ffmpeg_utils.py` | `ffprobe`/`ffmpeg` subprocess wrappers — resolution/fps/duration/audio-presence detection. |
@@ -82,21 +85,39 @@ writing code.
 
 ## Key technical decisions
 
-- **Gray's Anatomy (1918), not Netter.** Netter Atlas is commercially
-  licensed; Gray's 1918 (20th edition) is unambiguously Public Domain.
-  `assets/anatomy/README.md` documents the intended sourcing/curation
-  workflow via Wikimedia Commons.
+- **Gray's Anatomy (1918), not Netter, as the intended long-term source.**
+  Netter Atlas is commercially licensed; Gray's 1918 (20th edition) is
+  unambiguously Public Domain. `assets/anatomy/README.md` documents the
+  intended sourcing/curation workflow via Wikimedia Commons. For this
+  round, 6 muscles instead use an AI-generated reference sheet the project
+  owner supplied directly (confirmed with them it's their own AI output,
+  not a scraped/commercial image, before using it) — see "Anatomical art"
+  below. It is not Gray's 1918 and doesn't replace the intended sourcing
+  plan; it unblocked visual validation of the warp/occlusion pipeline
+  while Wikimedia stays unreachable from this sandbox.
 - **Image-based muscle art, not vector shapes.** The earlier chat-only
   prototype tried vector-drawn muscle fibers and it wasn't organic-looking
-  — this rejects that approach again for Milestone 1's placeholders (they
-  exist only to test pipeline wiring, and are logged/labeled as such
-  everywhere they appear) and commits the real asset path to curated
-  raster cutouts warped onto the pose.
-- **Thin-plate spline warp**, not a rigid affine transform, so a muscle
-  cutout can bend to follow a bent limb instead of just scaling/rotating —
-  implemented with `scipy.interpolate.RBFInterpolator` rather than
-  `opencv-contrib`'s TPS transformer, so the project only depends on
-  plain `opencv-python`.
+  — this rejects that approach again: every placeholder that still exists
+  (Rectus Abdominis, and anything else without curated art) is
+  logged/labeled as such everywhere it appears, and the real asset path is
+  committed to curated raster cutouts warped onto the pose.
+- **Thin-plate spline warp for well-spread control points, similarity
+  transform (rigid rotate+scale+translate, via closed-form Umeyama
+  least-squares) for exactly 2 points or nearly-collinear ones** —
+  implemented with `scipy.interpolate.RBFInterpolator` for TPS rather than
+  `opencv-contrib`'s TPS transformer, so the project only depends on plain
+  `opencv-python`. The collinear fallback exists because of a real bug
+  found running the actual test clip: the test pose has a fully extended
+  arm (front lever, hand gripping the bar overhead), so Triceps Brachii's
+  shoulder/elbow/wrist control points landed almost exactly on one line.
+  TPS is mathematically defined for collinear points, but it extrapolates
+  unboundedly for any source content off that line, and the triceps cutout
+  (which has real width perpendicular to the arm) got shredded into
+  repeated stretched strips. This isn't a one-clip quirk — any
+  fully-extended-limb pose (pull-ups, planks, presses) hits the same
+  failure mode for any muscle spanning that limb, so the fix
+  (`compositing/warp.py`'s `_is_nearly_collinear` check, via PCA
+  minor/major spread ratio) is generic, not a patch for this video.
 - **Occlusion via a continuous facing score**, not a hardcoded
   front/back rule per exercise: each muscle declares which way it faces on
   an upright body (`surface_facing` + `laterality`), and that's rotated by
@@ -136,7 +157,26 @@ Anatomy plates (Wikimedia-only) could not be fetched in this session. See
 `assets/anatomy/README.md` for the workaround (run the fetch step
 elsewhere, or get the domains allowlisted).
 
-## What's validated (`tests/test_pipeline.py`)
+## Anatomical art
+
+6 of 24 catalog muscles (`latissimus_dorsi_{r,l}`, `triceps_brachii_{r,l}`,
+`gluteus_maximus_{r,l}`) now have curated cutouts in
+`assets/anatomy/muscles/`, sourced from an AI-generated reference sheet
+the project owner provided directly and confirmed was their own AI output
+(not scraped or commercial art) — see `assets/anatomy/README.md`
+"Current status" for the full provenance note and the segmentation method
+(`scripts/segment_muscle_from_reference.py`, saturation-keyed background
+removal). `rectus_abdominis` and everything else in the catalog still
+render as the placeholder shape.
+
+Control points for these 6 were placed by visual estimate on a pixel grid,
+not clicked interactively with `scripts/pick_control_points.py` — treat
+the placement as a first pass. Visual spot-check against the real test
+clip (see below) shows plausible placement and correct behavior under a
+fully-extended-arm pose, but it has **not** been reviewed by the
+professional who validated this muscle set in the original brief.
+
+## What's validated
 
 All of these pass today and exercise real code paths, not mocks:
 
@@ -153,22 +193,28 @@ All of these pass today and exercise real code paths, not mocks:
   separately from public-domain photos on `raw.githubusercontent.com`
   since that host is reachable — correctly detects all 33 landmarks on
   two real photos of people.
-- **Full CLI run against a real photo turned into a short video**: pose
-  detected, 5-muscle overlay built and warped, occlusion applied, 3-segment
-  video assembled and concatenated (output duration = original + freeze
-  duration, resolution preserved). Visually spot-checked (see PR/commit
-  for a sample frame) — placeholder muscle shapes land in roughly the
-  right torso/thigh region.
+- **Full CLI run against the real test clip**: `input/test_clip_1.mov`
+  (4K portrait, front-lever/bar-hold, fully extended arms), paused at the
+  requested t=1s (landed on the nearest actual frame, t=0.875s, due to the
+  clip's ~21.5fps), held 5s, 7-muscle overlay (6 curated + 1 placeholder)
+  built/warped/occlusion-applied, 3-segment video assembled and
+  concatenated (output duration = original 2.78s + 5s freeze ≈ 7.8s,
+  resolution 2160x3840 preserved, iPhone rotation metadata handled
+  correctly by both the cv2 frame extraction and the ffmpeg segments).
+  Visually spot-checked at full res — see the sample frames sent to the
+  project owner. This run is also what surfaced the collinear-control-point
+  warp bug described above; the fix was verified by re-running this same
+  clip and confirming the shredding artifact was gone.
 
-**Not yet validated** (needs the real test clip + real assets, both
-blocked as described above): anatomical placement accuracy against a real
-exercise pose, visual quality of actual muscle art, and — per the brief's
-explicit requirement — professional sign-off on any of it. The catalog's
-`validated_by_professional` field is `false` for every entry except the
-Milestone 1 test case's 4 muscles + their mirrored pair (Latissimus Dorsi,
-Triceps Brachii, Rectus Abdominis, Gluteus Maximus), which the brief states
-were already approved; that field should be treated as unset elsewhere
-until someone actually reviews the output.
+**Not yet validated** (per the brief's explicit requirement): professional
+sign-off on the actual output — placement accuracy, visual quality, and
+Hebrew terminology. The catalog's `validated_by_professional` field is
+`false` for every entry except the Milestone 1 test case's 4 muscles +
+their mirrored pair (Latissimus Dorsi, Triceps Brachii, Rectus Abdominis,
+Gluteus Maximus), which the brief states were already approved *as a
+concept* — that predates, and doesn't substitute for, review of this
+specific rendered output. The leg-emphasis (squat) validation pass the
+brief also calls for hasn't been run — no second test clip yet.
 
 ## Running it
 
@@ -181,22 +227,29 @@ python3 tests/test_pipeline.py                  # should print "All checks passe
 python3 cli.py \
     --video input/test_clip_1.mov \
     --pause-time 1.0 \
-    --freeze-duration 3.0 \
+    --freeze-duration 5.0 \
     --muscles latissimus_dorsi_r latissimus_dorsi_l triceps_brachii_r \
               triceps_brachii_l rectus_abdominis gluteus_maximus_r \
               gluteus_maximus_l \
     --output output/test_clip_1_annotated.mp4
 ```
 
-(`ffmpeg` must be on `PATH`; `apt-get install -y ffmpeg` if it isn't.)
+(`ffmpeg` must be on `PATH`; `apt-get install -y ffmpeg` if it isn't. The
+real 4K test clip takes several minutes to render — see limitation below.)
 
 ## Known limitations / next steps
 
-1. **Upload `input/test_clip_1.mov`** (and, per the brief, a second clip
-   emphasizing leg muscles — e.g. a squat) to actually run and validate
-   Milestone 1's test case end-to-end.
-2. **Populate real anatomical assets** — see `assets/anatomy/README.md`.
-   Blocked on Wikimedia access from this sandbox.
+1. **4K rendering is slow** (~7.5 minutes for a 5s freeze on the real
+   3840x2160-sensor test clip), almost entirely in per-frame Python/OpenCV
+   compositing of the freeze segment's image sequence. Worth profiling and
+   optimizing (e.g. build the overlay once and reuse it across fade
+   frames instead of recompositing from scratch, or vectorize/batch the
+   alpha blend) before this is used on longer freezes or many muscles.
+2. **Curated art covers 6 of 24 catalog muscles**, all from a user-supplied
+   AI-generated reference sheet rather than the intended Gray's 1918
+   source — see "Anatomical art" above. Populating the rest, and replacing
+   these 6 with Gray's 1918 cutouts per the original plan, is still
+   blocked on Wikimedia access from this sandbox.
 3. **Occlusion is a 2-landmark yaw proxy**, not a true 3D reconstruction.
    The brief flags SMPL/SMPL-X body reconstruction as a path to a more
    general occlusion solution if a GPU becomes available — worth
@@ -209,8 +262,11 @@ python3 cli.py \
    3 starts both computed from the requested `pause_time_s`, while the
    frozen frame is the *nearest* actual frame `cv2` seeks to; on some
    codecs/frame rates this can show a 1-frame mismatch at the freeze
-   boundary. Not addressed since it's cosmetic and hasn't been checked
-   against a real clip yet.
+   boundary. Confirmed on the real clip: requesting `--pause-time 1.0`
+   landed on the actual frame at t=0.875s (the clip's frame rate is an
+   unusual ~21.5fps, an iPhone variable-frame-rate artifact) — close
+   enough not to be visually jarring here, but not literally exact.
+   Cosmetic; not addressed this round.
 6. **Hebrew muscle names** (`name_he` in the catalog) are standard
    anatomical terminology but haven't been reviewed by the professional
    who's validating the rest of the output — flag alongside the other
