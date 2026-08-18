@@ -1,0 +1,71 @@
+{
+  "layers": [
+    {
+      "image": "_fullbody_torso.png",
+      "landmarks": {
+        "NOSE": [
+          90,
+          260
+        ],
+        "LEFT_SHOULDER": [
+          295,
+          300
+        ],
+        "RIGHT_SHOULDER": [
+          310,
+          285
+        ],
+        "LEFT_HIP": [
+          545,
+          350
+        ],
+        "RIGHT_HIP": [
+          565,
+          360
+        ],
+        "LEFT_KNEE": [
+          860,
+          320
+        ],
+        "RIGHT_KNEE": [
+          860,
+          335
+        ],
+        "LEFT_ANKLE": [
+          1195,
+          285
+        ],
+        "RIGHT_ANKLE": [
+          1195,
+          300
+        ]
+      }
+    },
+    {
+      "image": "_fullbody_left_arm.png",
+      "landmarks": {
+        "LEFT_SHOULDER": [
+          295,
+          300
+        ],
+        "LEFT_WRIST": [
+          390,
+          15
+        ]
+      }
+    },
+    {
+      "image": "_fullbody_right_arm.png",
+      "landmarks": {
+        "RIGHT_SHOULDER": [
+          310,
+          285
+        ],
+        "RIGHT_WRIST": [
+          565,
+          50
+        ]
+      }
+    }
+  ]
+}

@@ -12,6 +12,7 @@ Run: python3 tests/test_pipeline.py
 """
 from __future__ import annotations
 
+import functools
 import math
 import pathlib
 import subprocess
@@ -23,7 +24,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import numpy as np
 
 from compositing.occlusion import resolve_opacity, GHOST_OPACITY, FULL_OPACITY
-from compositing.overlay import build_muscle_overlay
+from compositing.overlay import build_muscle_overlay, composite_overlay_on_frame
 from compositing.warp import warp_onto_canvas
 from muscle_library.library import MuscleLibrary
 from muscle_library.schema import BodyRegion, Laterality, MuscleDefinition, SurfaceFacing
@@ -240,11 +241,12 @@ def test_video_segment_pipeline():
         muscles = lib.resolve(["latissimus_dorsi_r", "triceps_brachii_r", "gluteus_maximus_r"])
         overlay = build_muscle_overlay(frame, muscles)
         frozen_frame_bgr = np.full((480, 640, 3), 128, dtype=np.uint8)
+        compose_frame_at_fade = functools.partial(composite_overlay_on_frame, frozen_frame_bgr, overlay)
 
         output_path = tmp_path / "annotated.mp4"
         build_annotated_video(
             video_path=synth_video, pause_time_s=1.0, freeze_duration_s=2.0,
-            frozen_frame_bgr=frozen_frame_bgr, overlay_rgba=overlay,
+            compose_frame_at_fade=compose_frame_at_fade,
             output_path=output_path, fade_in_s=0.4,
         )
         check("annotated output video created", output_path.exists())

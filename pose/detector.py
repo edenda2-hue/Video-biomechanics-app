@@ -51,9 +51,12 @@ def detect_pose(
     frame_bgr: np.ndarray,
     timestamp_s: float,
     model_path: str | pathlib.Path = DEFAULT_MODEL_PATH,
+    with_segmentation_mask: bool = False,
 ) -> PoseFrame:
     """Run MediaPipe Pose Landmarker on a single BGR frame and return a
-    PoseFrame. Raises PoseDetectionError if no person is detected."""
+    PoseFrame. Raises PoseDetectionError if no person is detected. Pass
+    with_segmentation_mask=True to also populate PoseFrame.segmentation_mask
+    (costs extra inference time, so it's opt-in)."""
     model_path = pathlib.Path(model_path)
     if not model_path.exists():
         raise PoseDetectionError(
@@ -74,6 +77,7 @@ def detect_pose(
         num_poses=1,
         min_pose_detection_confidence=0.5,
         min_pose_presence_confidence=0.5,
+        output_segmentation_masks=with_segmentation_mask,
     )
 
     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -94,16 +98,25 @@ def detect_pose(
         LANDMARK_NAMES[i]: Landmark(x=lm.x, y=lm.y, z=lm.z, visibility=lm.visibility)
         for i, lm in enumerate(raw_landmarks)
     }
-    return PoseFrame(frame_width=width, frame_height=height, timestamp_s=timestamp_s, landmarks=landmarks)
+    mask = None
+    if with_segmentation_mask and result.segmentation_masks:
+        mask = result.segmentation_masks[0].numpy_view().copy()
+    return PoseFrame(
+        frame_width=width, frame_height=height, timestamp_s=timestamp_s,
+        landmarks=landmarks, segmentation_mask=mask,
+    )
 
 
 def detect_pose_at_time(
     video_path: str | pathlib.Path,
     timestamp_s: float,
     model_path: str | pathlib.Path = DEFAULT_MODEL_PATH,
+    with_segmentation_mask: bool = False,
 ) -> tuple[np.ndarray, PoseFrame]:
     """Convenience: extract the frame at `timestamp_s` and run pose
     detection on it in one call. Returns (frame_bgr, PoseFrame)."""
     frame_bgr, actual_ts, _fps = extract_frame_at_time(video_path, timestamp_s)
-    pose_frame = detect_pose(frame_bgr, actual_ts, model_path=model_path)
+    pose_frame = detect_pose(
+        frame_bgr, actual_ts, model_path=model_path, with_segmentation_mask=with_segmentation_mask,
+    )
     return frame_bgr, pose_frame

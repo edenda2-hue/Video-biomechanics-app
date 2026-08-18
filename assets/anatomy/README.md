@@ -44,6 +44,24 @@ overlay, not clicked interactively** (`pick_control_points.py` exists for
 that but wasn't used this round) -- treat their placement as a rough first
 pass pending the professional-review step below, not a verified fit.
 
+- **Sheet 3** (`--style full-body` only, a third AI-generated sheet, also
+  provided directly and confirmed as the owner's own AI output): a
+  full-body illustration in the athlete's near-exact pose, used whole
+  (not per-muscle) by `compositing/full_body.py` to replace the subject
+  entirely rather than patch individual muscles onto them. Segmented by
+  keying out near-white/near-black/low-saturation pixels (background +
+  the pull-up rig, both effectively achromatic) with a border-flood-fill
+  pass to avoid also punching holes at small internal dark
+  shadows/creases in the illustration itself. Split into 3 files —
+  `_fullbody_torso.png`, `_fullbody_left_arm.png`, `_fullbody_right_arm.png`
+  — because a single whole-body thin-plate-spline fit folded the source
+  image where the overhead-reaching arm sharply reverses direction
+  relative to the flat torso (see main README "Key technical decisions").
+  `_fullbody_figure.json` holds each layer's filename + landmark
+  correspondences; unlike the per-muscle catalog entries, there's no
+  `pick_control_points.py`-equivalent tool for this format yet — layer
+  boundaries and points were picked by eye on a pixel grid.
+
 ## Why Gray's 1918 isn't populated
 
 This project's sandbox blocks the only legitimate source for these

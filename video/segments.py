@@ -1,25 +1,30 @@
 """Builds the 3-segment output video, generically over any input video,
-pause time, freeze duration, and pre-built overlay:
+pause time, freeze duration, and freeze-frame content:
 
   segment 1: original video, [0, pause_time]
-  segment 2: frozen frame at pause_time, held for freeze_duration, with
-             the muscle overlay fading in over fade_in_s and then holding
+  segment 2: frozen frame at pause_time, held for freeze_duration, fading
+             from the original frame to a composed "annotated" frame over
+             fade_in_s and then holding
   segment 3: original video, [pause_time, end]
 
 All three are re-encoded to a common codec/resolution/fps/pixel format
 (taken from the source video via ffprobe) so the concat demuxer can join
 them regardless of the input's original codec.
+
+`compose_frame_at_fade` decides what the annotated frame actually looks
+like -- a sparse muscle overlay (compositing/overlay.py) or a full-body
+illustration replacement (compositing/full_body.py) both just plug in as
+a `fade -> BGR frame` callable; this module doesn't know or care which.
 """
 from __future__ import annotations
 
 import pathlib
-import shutil
 import tempfile
+from typing import Callable
 
 import cv2
 import numpy as np
 
-from compositing.overlay import composite_overlay_on_frame
 from video.ffmpeg_utils import VideoInfo, probe, run
 
 _COMMON_VIDEO_ARGS = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "18"]
@@ -43,8 +48,7 @@ def _build_segment_3(video_path: pathlib.Path, pause_time_s: float, info: VideoI
 
 
 def _build_segment_2_freeze(
-    frozen_frame_bgr: np.ndarray,
-    overlay_rgba: np.ndarray,
+    compose_frame_at_fade: Callable[[float], np.ndarray],
     info: VideoInfo,
     freeze_duration_s: float,
     fade_in_s: float,
@@ -58,7 +62,7 @@ def _build_segment_2_freeze(
     frames_dir.mkdir(exist_ok=True)
     for i in range(frame_count):
         fade = min(1.0, i / fade_frame_count) if fade_frame_count > 0 else 1.0
-        composited = composite_overlay_on_frame(frozen_frame_bgr, overlay_rgba, fade=fade)
+        composited = compose_frame_at_fade(fade)
         cv2.imwrite(str(frames_dir / f"frame_{i:05d}.png"), composited)
 
     cmd = ["ffmpeg", "-y", "-framerate", f"{info.fps:.6f}", "-i", str(frames_dir / "frame_%05d.png")]
@@ -76,11 +80,15 @@ def build_annotated_video(
     video_path: str | pathlib.Path,
     pause_time_s: float,
     freeze_duration_s: float,
-    frozen_frame_bgr: np.ndarray,
-    overlay_rgba: np.ndarray,
+    compose_frame_at_fade: Callable[[float], np.ndarray],
     output_path: str | pathlib.Path,
     fade_in_s: float = 0.6,
 ) -> None:
+    """`compose_frame_at_fade(fade)` returns the BGR freeze-segment frame
+    for a given fade level in [0, 1] -- 0 should look like the original
+    video frame, 1 the fully-annotated result; see compositing/overlay.py
+    (composite_overlay_on_frame) and compositing/full_body.py for the two
+    existing implementations of that contract."""
     video_path = pathlib.Path(video_path)
     output_path = pathlib.Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,7 +104,7 @@ def build_annotated_video(
         seg3 = work_dir / "seg3.mp4"
 
         _build_segment_1(video_path, pause_time_s, info, seg1)
-        _build_segment_2_freeze(frozen_frame_bgr, overlay_rgba, info, freeze_duration_s, fade_in_s, seg2, work_dir)
+        _build_segment_2_freeze(compose_frame_at_fade, info, freeze_duration_s, fade_in_s, seg2, work_dir)
         _build_segment_3(video_path, pause_time_s, info, seg3)
 
         concat_list = work_dir / "concat.txt"

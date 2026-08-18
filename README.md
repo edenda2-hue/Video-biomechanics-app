@@ -32,38 +32,59 @@ calling Milestone 1 done.
 
 ## Architecture
 
+Two rendering styles share the same pose-detection and video-assembly
+backbone, and plug into it as interchangeable `fade -> BGR frame`
+composers (`cli.py --style overlay|full-body`):
+
 ```
-input/<video>  →  pose/detector.py  →  PoseFrame (33 landmarks + angles)
+input/<video>  →  pose/detector.py  →  PoseFrame (33 landmarks + angles
+                        │               [+ optional segmentation mask])
                         │
-muscle_library/         │
-  catalog.json  ───►  muscle_library/library.py  →  MuscleDefinition list
-  (full-body,           │
-   data-driven)         ▼
-              compositing/assets.py   (cutout PNG + control points, or
-                        │              a clearly-labeled placeholder)
-                        ▼
-              compositing/warp.py     (thin-plate-spline / similarity
-                        │              warp onto pose-derived target points)
-                        ▼
-              compositing/occlusion.py (camera-facing-based opacity)
-                        ▼
-              compositing/overlay.py  (alpha-composite all muscles → 1 RGBA layer)
-                        │
-                        ▼
-              video/segments.py + ffmpeg  (segment 1: original up to pause
-                                            segment 2: frozen frame, overlay fades in, holds
-                                            segment 3: original from pause to end
-                                            → concat)
-                        │
-                        ▼
-                    output video
+          ┌─────────────┴──────────────┐
+          ▼                             ▼
+   --style overlay              --style full-body
+   (per-muscle patches           (whole-figure replacement,
+    on real footage)              compositing/full_body.py)
+          │                             │
+muscle_library/catalog.json      inpaint_person_out()  (erase athlete via
+  (full-body, data-driven)       segmentation mask + cv2.inpaint, fill
+          │                       with plausible background)
+          ▼                             │
+compositing/assets.py            warp_fullbody_onto_pose()  (multi-layer
+  (cutout + control points,       illustration warp -- see "Key technical
+   or a labeled placeholder)      decisions" for why it's layered)
+          │                             │
+          ▼                             ▼
+compositing/warp.py               composited onto the inpainted
+  (thin-plate-spline /            background → one full "target" frame
+   similarity warp)                      │
+          │                              │
+          ▼                              │
+compositing/occlusion.py                 │
+  (camera-facing opacity)                │
+          │                              │
+          ▼                              │
+compositing/overlay.py                   │
+  (alpha-composite muscles                │
+   → 1 RGBA layer)                        │
+          │                              │
+          └──────────────┬───────────────┘
+                          ▼
+          video/segments.py + ffmpeg  (segment 1: original up to pause
+                                        segment 2: frozen frame fades from
+                                          original → composed target, holds
+                                        segment 3: original from pause to end
+                                        → concat)
+                          │
+                          ▼
+                      output video
 ```
 
 Everything above is parameterized: video path, pause timestamp, freeze
-duration, fade-in duration, and muscle selection are all CLI arguments
-(`cli.py`) — none of them appear as constants in the pipeline modules.
-Adding a muscle means adding a `muscle_library/catalog.json` entry, not
-writing code.
+duration, fade-in duration, style, and muscle selection (overlay mode
+only) are all CLI arguments — none of them appear as constants in the
+pipeline modules. Adding a muscle to overlay mode means adding a
+`muscle_library/catalog.json` entry, not writing code.
 
 ### Modules
 
@@ -78,9 +99,10 @@ writing code.
 | `compositing/assets.py` | Loads a muscle's cutout image + control points, or synthesizes a labeled placeholder if the curated asset doesn't exist yet. |
 | `compositing/warp.py` | Warps a source image so its control points land on target (pose-derived) points — thin-plate spline for ≥3 well-spread points, similarity transform (2 points, or ≥3 nearly-collinear ones) otherwise. |
 | `compositing/occlusion.py` | Continuous opacity from the angle between the camera's viewing axis and each muscle's estimated body-surface normal (derived from torso yaw + the muscle's declared facing) — not a per-exercise rule. |
-| `compositing/overlay.py` | Combines warped, opacity-adjusted muscles into one RGBA layer per pose frame, and alpha-composites that layer onto a video frame at a given fade level. |
+| `compositing/overlay.py` | Combines warped, opacity-adjusted muscles into one RGBA layer per pose frame, alpha-composites it onto a video frame at a given fade level (overlay mode), and has a plain whole-frame `crossfade_frames` used by full-body mode. |
+| `compositing/full_body.py` | `--style full-body`: erases the subject via a MediaPipe segmentation mask + `cv2.inpaint`, warps a (possibly multi-layer) full-body illustration onto the exact detected pose, composites it into the cleaned background. |
 | `video/ffmpeg_utils.py` | `ffprobe`/`ffmpeg` subprocess wrappers — resolution/fps/duration/audio-presence detection. |
-| `video/segments.py` | Builds and concatenates the 3 segments for any duration/resolution/fps/codec input. |
+| `video/segments.py` | Builds and concatenates the 3 segments for any duration/resolution/fps/codec input; the freeze segment takes a `fade -> frame` callable, agnostic to which style produced it. |
 | `cli.py` | Orchestrates all of the above from command-line arguments. |
 | `tests/test_pipeline.py` | Dependency-free smoke tests (see below). |
 
@@ -103,11 +125,13 @@ writing code.
   is logged/labeled as such everywhere it appears, and the real asset path
   is committed to curated raster cutouts warped onto the pose.
 - **Thin-plate spline warp for well-spread control points, similarity
-  transform (rigid rotate+scale+translate, via closed-form Umeyama
-  least-squares) for exactly 2 points or nearly-collinear ones** —
-  implemented with `scipy.interpolate.RBFInterpolator` for TPS rather than
-  `opencv-contrib`'s TPS transformer, so the project only depends on plain
-  `opencv-python`. The collinear fallback exists because of a real bug
+  transform (rigid rotate+scale+translate, no shear) for exactly 2 points
+  or nearly-collinear ones** — TPS via `scipy.interpolate.RBFInterpolator`
+  rather than `opencv-contrib`'s TPS transformer, so the project only
+  depends on plain `opencv-python`; the similarity fallback is a
+  closed-form 2-point solve for exactly 2 points, or `cv2.estimateAffinePartial2D`
+  (least-squares) for 3+ collinear ones. The collinear fallback exists
+  because of a real bug
   found running the actual test clip: the test pose has a fully extended
   arm (front lever, hand gripping the bar overhead), so Triceps Brachii's
   shoulder/elbow/wrist control points landed almost exactly on one line.
@@ -136,6 +160,26 @@ writing code.
   codec/resolution/fps/pixel-format** (taken from the source video via
   `ffprobe`) rather than stream-copying, so concatenation works regardless
   of the input file's original codec.
+- **Full-body illustration warp is split into independent layers, not one
+  global TPS fit.** The project owner's second reference sheet is in
+  nearly the athlete's exact pose, which suggested a "copy-paste"-style
+  whole-figure replacement (`--style full-body`) instead of per-muscle
+  patches. The first attempt fit a single thin-plate spline across all
+  ~13 body landmarks (head to feet, both arms) at once, and it folded the
+  source image into a self-intersecting mess: the arm reaching overhead
+  while the torso lies flat is a sharp direction reversal relative to the
+  torso→hip→knee→ankle chain, and TPS handles that badly across one
+  global fit. Splitting the source into 3 layers — torso+legs (TPS over
+  head/shoulders/hips/knees/ankles, all part of one smooth curve) plus one
+  layer per arm (each its own simple 2-point shoulder→wrist similarity
+  transform) — and alpha-compositing the independently-warped layers back
+  together fixed it. `compositing/full_body.py`'s `FullBodyAsset` supports
+  any number of layers, so this generalizes to other poses/assets, not
+  just this one image.
+- **Background removal via MediaPipe's segmentation mask + `cv2.inpaint`**,
+  not a green-screen or manual mask — works on arbitrary real footage.
+  Quality is bounded by what single-frame inpainting can plausibly guess
+  about what's actually occluded (see "Known limitations").
 
 ## Network constraints hit in this sandbox
 
@@ -182,6 +226,12 @@ Rectus Abdominis cutout in particular is lower-fidelity than the other 6
 (see `assets/anatomy/README.md` for why) and is the best candidate to
 redo first if/when Gray's 1918 access unblocks.
 
+**`--style full-body`** uses a third, separate reference sheet (a
+full-body illustration in the athlete's near-exact pose) split into 3
+layers at `assets/anatomy/muscles/_fullbody_{torso,left_arm,right_arm}.png`
++ `_fullbody_figure.json` (landmark correspondences per layer). Same
+provenance and same "not reviewed by a professional" caveat apply.
+
 ## What's validated
 
 All of these pass today and exercise real code paths, not mocks:
@@ -211,6 +261,12 @@ All of these pass today and exercise real code paths, not mocks:
   project owner. This run is also what surfaced the collinear-control-point
   warp bug described above; the fix was verified by re-running this same
   clip and confirming the shredding artifact was gone.
+- **Full CLI run with `--style full-body`** against the same real clip:
+  segmentation mask correctly isolated the athlete, inpainting removed
+  them, the 3-layer illustration warp landed in the right pose with no
+  folding, composited into the real background, 3-segment video
+  assembled. Visually spot-checked at full res. This run is also what
+  surfaced (and fixed) the whole-body TPS folding failure described above.
 
 **Not yet validated** (per the brief's explicit requirement): professional
 sign-off on the actual output — placement accuracy, visual quality, and
@@ -238,6 +294,11 @@ python3 cli.py \
               triceps_brachii_l rectus_abdominis gluteus_maximus_r \
               gluteus_maximus_l \
     --output output/test_clip_1_annotated.mp4
+
+# or, whole-figure replacement instead of per-muscle patches:
+python3 cli.py \
+    --video input/test_clip_1.mov --pause-time 1.0 --freeze-duration 5.0 \
+    --style full-body --output output/test_clip_1_fullbody.mp4
 ```
 
 (`ffmpeg` must be on `PATH`; `apt-get install -y ffmpeg` if it isn't. The
@@ -277,3 +338,24 @@ real 4K test clip takes several minutes to render — see limitation below.)
    anatomical terminology but haven't been reviewed by the professional
    who's validating the rest of the output — flag alongside the other
    validation items.
+7. **`--style full-body`'s inpainted background is approximate.**
+   Single-frame inpainting can only guess at what's actually behind the
+   athlete from the surrounding pixels of that one frame — on the real
+   test clip this shows up as mild blurring on the pull-up bar where it
+   passes behind the body/hands, since a thin straight line occluded over
+   a long stretch is exactly the kind of structure inpainting reconstructs
+   worst. A background with more open sky/foliage and less occluded
+   fine structure would inpaint more cleanly. A generically better fix
+   would source clean background pixels from a different frame of the
+   same clip (where they're unoccluded) instead of hallucinating them,
+   but that wasn't implemented this round.
+8. **Full-body layer landmarks are current-clip-shaped.** The 3-layer
+   split (torso+legs / left arm / right arm) and its arm bounding boxes
+   were chosen by looking at this one reference illustration; a
+   differently-posed or differently-cropped full-body reference would need
+   its own layer boundaries picked the same way (`assets/anatomy/README.md`
+   documents the general curation workflow, but full-body-style multi-layer
+   assets don't yet have their own equivalent of `pick_control_points.py`).
+9. **Full-body mode's inference cost is higher than overlay mode**
+   (segmentation mask + inpainting on top of pose detection), though still
+   a single-frame cost, not per-video-frame.

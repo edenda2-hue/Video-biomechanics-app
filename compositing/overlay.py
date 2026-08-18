@@ -74,3 +74,14 @@ def composite_overlay_on_frame(frame_bgr: np.ndarray, overlay_rgba: np.ndarray, 
     scaled_overlay[..., 3] = (scaled_overlay[..., 3].astype(np.float64) * fade).astype(np.uint8)
     composited = _alpha_composite(frame_bgra, scaled_overlay)
     return cv2.cvtColor(composited, cv2.COLOR_BGRA2BGR)
+
+
+def crossfade_frames(frame_a_bgr: np.ndarray, frame_b_bgr: np.ndarray, fade: float) -> np.ndarray:
+    """Plain whole-frame dissolve from `frame_a_bgr` (fade=0) to
+    `frame_b_bgr` (fade=1) -- used by the full-body replacement mode
+    (compositing/full_body.py), where the "annotated" frame isn't a sparse
+    overlay on top of the original but an entirely different composed
+    image (inpainted background + warped illustration)."""
+    fade = max(0.0, min(1.0, fade))
+    blended = frame_a_bgr.astype(np.float64) * (1 - fade) + frame_b_bgr.astype(np.float64) * fade
+    return blended.astype(np.uint8)

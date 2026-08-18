@@ -3,7 +3,9 @@ so the rest of the pipeline (muscle_library, compositing, video) never
 imports mediapipe directly — only pose/detector.py does."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+import numpy as np
 
 # MediaPipe Pose's 33 landmarks, in the index order the model outputs them.
 # https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker
@@ -53,6 +55,11 @@ class PoseFrame:
     frame_height: int
     timestamp_s: float
     landmarks: dict[str, Landmark]  # keyed by LANDMARK_NAMES entries
+    # Per-pixel person-vs-background confidence in [0, 1], same size as the
+    # frame; only populated when the caller asked for it (it costs extra
+    # inference time) -- e.g. compositing/full_body.py uses it to erase the
+    # person from the frame before inpainting a clean background plate.
+    segmentation_mask: np.ndarray | None = field(default=None, compare=False, repr=False)
 
     def px(self, name: str) -> tuple[float, float]:
         """Landmark position in pixel coordinates."""
