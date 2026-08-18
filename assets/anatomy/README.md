@@ -11,31 +11,38 @@ in `pose/`, `compositing/`, or `video/`. Two subfolders:
 
 ## Current status
 
-6 of 24 catalog entries have curated art: `latissimus_dorsi_{r,l}`,
-`triceps_brachii_{r,l}`, `gluteus_maximus_{r,l}`. Source: an AI-generated
-reference illustration sheet the project owner provided directly (not
-Gray's 1918 -- confirmed with them that they generated it themselves, so
-it's clear to use here; see git history for the exact exchange). It was
-segmented into per-muscle transparent cutouts with
-`scripts/segment_muscle_from_reference.py` (keys on saturation: this
-illustration style draws muscle tissue as saturated red/salmon against
-white background, pale bone, and dark text/labels, so thresholding
-saturation cleanly isolates the muscle from everything else in one pass).
-Bilateral pairs that the reference only drew once were produced as a
-horizontal mirror of the other side (`cv2.flip`) rather than a second
-independent crop -- anatomically valid for paired muscles, and it
-guarantees the two sides are exactly symmetric.
+All 7 muscle instances in the Milestone 1 test case now have curated art
+— every other catalog entry (17 more) still renders as the placeholder.
+Two AI-generated reference sheets, both provided directly by the project
+owner and confirmed as their own AI output (not scraped or commercial
+art), not Gray's 1918:
 
-`rectus_abdominis` (and everything else in the catalog) still has no
-curated art and renders as the placeholder described below -- the
-reference sheet didn't include it, and Gray's 1918 is still unreachable
-from this sandbox (see next section).
+- **Sheet 1** (standing, isolated close-ups per muscle, blank background):
+  `latissimus_dorsi_{r,l}`, `triceps_brachii_{r,l}`, `gluteus_maximus_{r,l}`.
+  Segmented with `scripts/segment_muscle_from_reference.py` (saturation
+  threshold cleanly isolates each muscle since the source has blank space
+  around it). Bilateral pairs the sheet only drew once were produced as a
+  horizontal mirror of the other side (`cv2.flip`) rather than a second
+  independent crop.
+- **Sheet 2** (a single full-body illustration in the *same pose* as the
+  test clip -- front lever / bar hold, arm fully extended overhead):
+  `rectus_abdominis`. This sheet is continuous full-body art with no gaps
+  between muscle groups, so saturation thresholding can't find a clean
+  per-muscle boundary the way it does on sheet 1 -- the abs cutout is a
+  plain rectangular crop of the visible abdominal region, lower detail
+  than the sheet-1 cutouts, and its anchor_landmarks were simplified from
+  4 points (`LEFT/RIGHT_SHOULDER`, `LEFT/RIGHT_HIP`) to 2
+  (`RIGHT_SHOULDER`, `RIGHT_HIP`) since the source is a side view, not a
+  symmetric front view a 4-point fit assumes. Sheet 2 was *not* used to
+  redo the other 3 muscles -- sheet 1's isolated-close-up versions were
+  already working well (see main README's warp-collinearity fix, verified
+  against this exact clip), so they were kept rather than swapped for a
+  same-pose source that's harder to cleanly segment.
 
-**Control points for the 6 curated muscles were placed by visual estimate
-on a pixel grid overlay, not clicked interactively** (`pick_control_points.py`
-exists for that but wasn't used this round) -- treat their placement as a
-rough first pass pending the professional-review step below, not a
-verified fit.
+**Control points for all 7 were placed by visual estimate on a pixel grid
+overlay, not clicked interactively** (`pick_control_points.py` exists for
+that but wasn't used this round) -- treat their placement as a rough first
+pass pending the professional-review step below, not a verified fit.
 
 ## Why Gray's 1918 isn't populated
 

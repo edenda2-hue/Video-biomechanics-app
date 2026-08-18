@@ -8,11 +8,11 @@ playback. General-purpose by design — not built around any one exercise.
 
 **תקציר (עברית):** ה-pipeline הכללי של Milestone 1 רץ בפועל על מקרה הבדיקה
 האמיתי (`input/test_clip_1.mov` — תרגיל bar hold, עצירה בשנייה 1, השהיה 5
-שניות). 6 מתוך 7 השרירים המבוקשים (Latissimus Dorsi, Triceps Brachii,
-Gluteus Maximus — כל אחד בשני הצדדים) מוצגים כעת עם איור אנטומי אמיתי
-(שסופק ע"י המשתמש, נוצר ב-AI, לא מ-Gray's 1918 בגלל חסימת הרשת ל-Wikimedia
-בסביבה הזו). Rectus Abdominis עדיין placeholder כי לא סופק איור עבורו.
-פרטים מלאים בהמשך המסמך (באנגלית) ובקובץ `assets/anatomy/README.md`.
+שניות). כל 7 השרירים המבוקשים (Latissimus Dorsi, Triceps Brachii,
+Gluteus Maximus — כל אחד בשני הצדדים, ו-Rectus Abdominis) מוצגים כעת עם
+איור אנטומי אמיתי (שסופק ע"י המשתמש, נוצר ב-AI, לא מ-Gray's 1918 בגלל
+חסימת הרשת ל-Wikimedia בסביבה הזו). פרטים מלאים בהמשך המסמך (באנגלית)
+ובקובץ `assets/anatomy/README.md`.
 
 ## Status: Milestone 1
 
@@ -20,9 +20,10 @@ The general pipeline has been run end-to-end against the real test clip
 described in the project brief: `input/test_clip_1.mov` (an outdoor bar
 front-lever/hold, 4K portrait, iPhone), paused at t=1s, held for 5s, with
 Latissimus Dorsi / Triceps Brachii / Gluteus Maximus (each bilateral) and
-Rectus Abdominis. 6 of those 7 muscle instances now render with real
-curated anatomical art (see "Anatomical art" below); Rectus Abdominis is
-still the placeholder shape since no source art exists for it yet.
+Rectus Abdominis. All 7 of those muscle instances now render with real
+curated anatomical art (see "Anatomical art" below) — the last gap
+(Rectus Abdominis) was filled from a second, pose-matched reference sheet
+the project owner provided after seeing the first render.
 
 Running the real clip through the real pipeline surfaced (and fixed) a
 genuine bug -- see "Key technical decisions" -- that synthetic test data
@@ -98,9 +99,9 @@ writing code.
 - **Image-based muscle art, not vector shapes.** The earlier chat-only
   prototype tried vector-drawn muscle fibers and it wasn't organic-looking
   — this rejects that approach again: every placeholder that still exists
-  (Rectus Abdominis, and anything else without curated art) is
-  logged/labeled as such everywhere it appears, and the real asset path is
-  committed to curated raster cutouts warped onto the pose.
+  (17 of 24 catalog muscles, everything outside the Milestone 1 test case)
+  is logged/labeled as such everywhere it appears, and the real asset path
+  is committed to curated raster cutouts warped onto the pose.
 - **Thin-plate spline warp for well-spread control points, similarity
   transform (rigid rotate+scale+translate, via closed-form Umeyama
   least-squares) for exactly 2 points or nearly-collinear ones** —
@@ -159,22 +160,27 @@ elsewhere, or get the domains allowlisted).
 
 ## Anatomical art
 
-6 of 24 catalog muscles (`latissimus_dorsi_{r,l}`, `triceps_brachii_{r,l}`,
-`gluteus_maximus_{r,l}`) now have curated cutouts in
-`assets/anatomy/muscles/`, sourced from an AI-generated reference sheet
-the project owner provided directly and confirmed was their own AI output
-(not scraped or commercial art) — see `assets/anatomy/README.md`
-"Current status" for the full provenance note and the segmentation method
+All 7 muscle instances in the Milestone 1 test case (`latissimus_dorsi_{r,l}`,
+`triceps_brachii_{r,l}`, `gluteus_maximus_{r,l}`, `rectus_abdominis`) now
+have curated cutouts in `assets/anatomy/muscles/` — the other 17 catalog
+entries still render as the placeholder shape. Source: two AI-generated
+reference sheets the project owner provided directly and confirmed as
+their own AI output (not scraped or commercial art) — see
+`assets/anatomy/README.md` "Current status" for the full provenance note,
+the two sheets' different styles (isolated close-ups vs. a single
+pose-matched full-body illustration), and the segmentation method
 (`scripts/segment_muscle_from_reference.py`, saturation-keyed background
-removal). `rectus_abdominis` and everything else in the catalog still
-render as the placeholder shape.
+removal).
 
-Control points for these 6 were placed by visual estimate on a pixel grid,
+Control points for all 7 were placed by visual estimate on a pixel grid,
 not clicked interactively with `scripts/pick_control_points.py` — treat
 the placement as a first pass. Visual spot-check against the real test
 clip (see below) shows plausible placement and correct behavior under a
 fully-extended-arm pose, but it has **not** been reviewed by the
-professional who validated this muscle set in the original brief.
+professional who validated this muscle set in the original brief. The
+Rectus Abdominis cutout in particular is lower-fidelity than the other 6
+(see `assets/anatomy/README.md` for why) and is the best candidate to
+redo first if/when Gray's 1918 access unblocks.
 
 ## What's validated
 
@@ -196,7 +202,7 @@ All of these pass today and exercise real code paths, not mocks:
 - **Full CLI run against the real test clip**: `input/test_clip_1.mov`
   (4K portrait, front-lever/bar-hold, fully extended arms), paused at the
   requested t=1s (landed on the nearest actual frame, t=0.875s, due to the
-  clip's ~21.5fps), held 5s, 7-muscle overlay (6 curated + 1 placeholder)
+  clip's ~21.5fps), held 5s, 7-muscle overlay (all 7 with curated art)
   built/warped/occlusion-applied, 3-segment video assembled and
   concatenated (output duration = original 2.78s + 5s freeze ≈ 7.8s,
   resolution 2160x3840 preserved, iPhone rotation metadata handled
@@ -245,10 +251,10 @@ real 4K test clip takes several minutes to render — see limitation below.)
    optimizing (e.g. build the overlay once and reuse it across fade
    frames instead of recompositing from scratch, or vectorize/batch the
    alpha blend) before this is used on longer freezes or many muscles.
-2. **Curated art covers 6 of 24 catalog muscles**, all from a user-supplied
-   AI-generated reference sheet rather than the intended Gray's 1918
+2. **Curated art covers 7 of 24 catalog muscles**, all from user-supplied
+   AI-generated reference sheets rather than the intended Gray's 1918
    source — see "Anatomical art" above. Populating the rest, and replacing
-   these 6 with Gray's 1918 cutouts per the original plan, is still
+   these 7 with Gray's 1918 cutouts per the original plan, is still
    blocked on Wikimedia access from this sandbox.
 3. **Occlusion is a 2-landmark yaw proxy**, not a true 3D reconstruction.
    The brief flags SMPL/SMPL-X body reconstruction as a path to a more

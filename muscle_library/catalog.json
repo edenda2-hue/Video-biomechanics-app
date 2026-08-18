@@ -104,7 +104,7 @@
     {
       "id": "rectus_abdominis", "name": "Rectus Abdominis", "name_he": "שריר ישר הבטן",
       "group": "core", "laterality": "central",
-      "anchor_landmarks": ["LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_HIP", "RIGHT_HIP"],
+      "anchor_landmarks": ["RIGHT_SHOULDER", "RIGHT_HIP"],
       "surface_facing": "anterior",
       "cutout_asset": "rectus_abdominis.png",
       "source_plate_hint": "Gray's Anatomy (1918) - muscles of the abdomen, anterior view",
