@@ -1,0 +1,252 @@
+{
+  "_comment": "Full-body muscle catalog. Data-driven: adding/editing a muscle here is all that's needed to make it selectable — no pipeline code changes. anchor_landmarks reference MediaPipe Pose's 33 landmark names (pose/types.py). cutout_asset files are NOT yet populated (see assets/anatomy/README.md) — compositing/assets.py renders a clearly labeled placeholder until curated cutouts exist. Hebrew terminology and exact anatomical placement need professional sign-off before clinical/production use (see README validation checklist).",
+  "muscles": [
+    {
+      "id": "deltoid_r", "name": "Deltoid (right)", "name_he": "שריר הדלתא (ימין)",
+      "group": "upper_body", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_SHOULDER", "RIGHT_ELBOW"],
+      "surface_facing": "lateral",
+      "cutout_asset": "deltoid_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - shoulder region, muscles of the upper limb"
+    },
+    {
+      "id": "deltoid_l", "name": "Deltoid (left)", "name_he": "שריר הדלתא (שמאל)",
+      "group": "upper_body", "laterality": "left",
+      "anchor_landmarks": ["LEFT_SHOULDER", "LEFT_ELBOW"],
+      "surface_facing": "lateral",
+      "cutout_asset": "deltoid_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - shoulder region, muscles of the upper limb"
+    },
+    {
+      "id": "pectoralis_major_r", "name": "Pectoralis Major (right)", "name_he": "שריר החזה הגדול (ימין)",
+      "group": "upper_body", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_SHOULDER", "LEFT_SHOULDER", "RIGHT_ELBOW"],
+      "surface_facing": "anterior",
+      "cutout_asset": "pectoralis_major_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the thorax, anterior view"
+    },
+    {
+      "id": "pectoralis_major_l", "name": "Pectoralis Major (left)", "name_he": "שריר החזה הגדול (שמאל)",
+      "group": "upper_body", "laterality": "left",
+      "anchor_landmarks": ["LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_ELBOW"],
+      "surface_facing": "anterior",
+      "cutout_asset": "pectoralis_major_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the thorax, anterior view"
+    },
+    {
+      "id": "trapezius", "name": "Trapezius", "name_he": "שריר הטרפז",
+      "group": "upper_body", "laterality": "central",
+      "anchor_landmarks": ["LEFT_SHOULDER", "RIGHT_SHOULDER", "NOSE"],
+      "surface_facing": "posterior",
+      "cutout_asset": "trapezius.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the back, superficial layer"
+    },
+    {
+      "id": "latissimus_dorsi_r", "name": "Latissimus Dorsi (right)", "name_he": "שריר גבי רחב (ימין)",
+      "group": "upper_body", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_SHOULDER", "RIGHT_HIP", "RIGHT_ELBOW"],
+      "surface_facing": "posterior",
+      "cutout_asset": "latissimus_dorsi_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the back, superficial layer",
+      "validated_by_professional": true
+    },
+    {
+      "id": "latissimus_dorsi_l", "name": "Latissimus Dorsi (left)", "name_he": "שריר גבי רחב (שמאל)",
+      "group": "upper_body", "laterality": "left",
+      "anchor_landmarks": ["LEFT_SHOULDER", "LEFT_HIP", "LEFT_ELBOW"],
+      "surface_facing": "posterior",
+      "cutout_asset": "latissimus_dorsi_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the back, superficial layer",
+      "validated_by_professional": true
+    },
+    {
+      "id": "biceps_brachii_r", "name": "Biceps Brachii (right)", "name_he": "שריר דו-ראשי הזרוע (ימין)",
+      "group": "upper_body", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_SHOULDER", "RIGHT_ELBOW", "RIGHT_WRIST"],
+      "surface_facing": "anterior",
+      "cutout_asset": "biceps_brachii_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the upper arm, anterior view"
+    },
+    {
+      "id": "biceps_brachii_l", "name": "Biceps Brachii (left)", "name_he": "שריר דו-ראשי הזרוע (שמאל)",
+      "group": "upper_body", "laterality": "left",
+      "anchor_landmarks": ["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"],
+      "surface_facing": "anterior",
+      "cutout_asset": "biceps_brachii_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the upper arm, anterior view"
+    },
+    {
+      "id": "triceps_brachii_r", "name": "Triceps Brachii (right)", "name_he": "שריר תלת-ראשי הזרוע (ימין)",
+      "group": "upper_body", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_SHOULDER", "RIGHT_ELBOW", "RIGHT_WRIST"],
+      "surface_facing": "posterior",
+      "cutout_asset": "triceps_brachii_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the upper arm, posterior view",
+      "validated_by_professional": true
+    },
+    {
+      "id": "triceps_brachii_l", "name": "Triceps Brachii (left)", "name_he": "שריר תלת-ראשי הזרוע (שמאל)",
+      "group": "upper_body", "laterality": "left",
+      "anchor_landmarks": ["LEFT_SHOULDER", "LEFT_ELBOW", "LEFT_WRIST"],
+      "surface_facing": "posterior",
+      "cutout_asset": "triceps_brachii_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the upper arm, posterior view",
+      "validated_by_professional": true
+    },
+    {
+      "id": "rhomboids", "name": "Rhomboids", "name_he": "שרירים מעוינים",
+      "group": "upper_body", "laterality": "central",
+      "anchor_landmarks": ["LEFT_SHOULDER", "RIGHT_SHOULDER"],
+      "surface_facing": "posterior",
+      "cutout_asset": "rhomboids.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the back, deep layer"
+    },
+    {
+      "id": "rectus_abdominis", "name": "Rectus Abdominis", "name_he": "שריר ישר הבטן",
+      "group": "core", "laterality": "central",
+      "anchor_landmarks": ["LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_HIP", "RIGHT_HIP"],
+      "surface_facing": "anterior",
+      "cutout_asset": "rectus_abdominis.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the abdomen, anterior view",
+      "validated_by_professional": true
+    },
+    {
+      "id": "external_oblique_r", "name": "External Oblique (right)", "name_he": "שריר אלכסון חיצוני (ימין)",
+      "group": "core", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_SHOULDER", "RIGHT_HIP"],
+      "surface_facing": "lateral",
+      "cutout_asset": "external_oblique_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the abdomen, lateral view"
+    },
+    {
+      "id": "external_oblique_l", "name": "External Oblique (left)", "name_he": "שריר אלכסון חיצוני (שמאל)",
+      "group": "core", "laterality": "left",
+      "anchor_landmarks": ["LEFT_SHOULDER", "LEFT_HIP"],
+      "surface_facing": "lateral",
+      "cutout_asset": "external_oblique_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the abdomen, lateral view"
+    },
+    {
+      "id": "erector_spinae", "name": "Erector Spinae", "name_he": "שריר זוקף השדרה",
+      "group": "core", "laterality": "central",
+      "anchor_landmarks": ["LEFT_SHOULDER", "RIGHT_SHOULDER", "LEFT_HIP", "RIGHT_HIP"],
+      "surface_facing": "posterior",
+      "cutout_asset": "erector_spinae.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - deep muscles of the back"
+    },
+    {
+      "id": "gluteus_maximus_r", "name": "Gluteus Maximus (right)", "name_he": "שריר עכוזי גדול (ימין)",
+      "group": "lower_body", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_HIP", "RIGHT_KNEE"],
+      "surface_facing": "posterior",
+      "cutout_asset": "gluteus_maximus_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the gluteal region",
+      "validated_by_professional": true
+    },
+    {
+      "id": "gluteus_maximus_l", "name": "Gluteus Maximus (left)", "name_he": "שריר עכוזי גדול (שמאל)",
+      "group": "lower_body", "laterality": "left",
+      "anchor_landmarks": ["LEFT_HIP", "LEFT_KNEE"],
+      "surface_facing": "posterior",
+      "cutout_asset": "gluteus_maximus_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the gluteal region",
+      "validated_by_professional": true
+    },
+    {
+      "id": "quadriceps_r", "name": "Quadriceps Femoris (right)", "name_he": "שריר ארבע-ראשי הירך (ימין)",
+      "group": "lower_body", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_HIP", "RIGHT_KNEE"],
+      "surface_facing": "anterior",
+      "cutout_asset": "quadriceps_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the thigh, anterior view"
+    },
+    {
+      "id": "quadriceps_l", "name": "Quadriceps Femoris (left)", "name_he": "שריר ארבע-ראשי הירך (שמאל)",
+      "group": "lower_body", "laterality": "left",
+      "anchor_landmarks": ["LEFT_HIP", "LEFT_KNEE"],
+      "surface_facing": "anterior",
+      "cutout_asset": "quadriceps_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the thigh, anterior view"
+    },
+    {
+      "id": "hamstrings_r", "name": "Hamstrings (right)", "name_he": "שרירי הירך האחוריים (ימין)",
+      "group": "lower_body", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_HIP", "RIGHT_KNEE"],
+      "surface_facing": "posterior",
+      "cutout_asset": "hamstrings_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the thigh, posterior view"
+    },
+    {
+      "id": "hamstrings_l", "name": "Hamstrings (left)", "name_he": "שרירי הירך האחוריים (שמאל)",
+      "group": "lower_body", "laterality": "left",
+      "anchor_landmarks": ["LEFT_HIP", "LEFT_KNEE"],
+      "surface_facing": "posterior",
+      "cutout_asset": "hamstrings_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the thigh, posterior view"
+    },
+    {
+      "id": "adductors_r", "name": "Hip Adductors (right)", "name_he": "שרירי מקרבי הירך (ימין)",
+      "group": "lower_body", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_HIP", "RIGHT_KNEE"],
+      "surface_facing": "anterior",
+      "cutout_asset": "adductors_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the medial thigh"
+    },
+    {
+      "id": "adductors_l", "name": "Hip Adductors (left)", "name_he": "שרירי מקרבי הירך (שמאל)",
+      "group": "lower_body", "laterality": "left",
+      "anchor_landmarks": ["LEFT_HIP", "LEFT_KNEE"],
+      "surface_facing": "anterior",
+      "cutout_asset": "adductors_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the medial thigh"
+    },
+    {
+      "id": "gastrocnemius_r", "name": "Gastrocnemius (right)", "name_he": "שריר תאומי השוק (ימין)",
+      "group": "lower_body", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_KNEE", "RIGHT_ANKLE"],
+      "surface_facing": "posterior",
+      "cutout_asset": "gastrocnemius_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the leg, posterior view"
+    },
+    {
+      "id": "gastrocnemius_l", "name": "Gastrocnemius (left)", "name_he": "שריר תאומי השוק (שמאל)",
+      "group": "lower_body", "laterality": "left",
+      "anchor_landmarks": ["LEFT_KNEE", "LEFT_ANKLE"],
+      "surface_facing": "posterior",
+      "cutout_asset": "gastrocnemius_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the leg, posterior view"
+    },
+    {
+      "id": "tibialis_anterior_r", "name": "Tibialis Anterior (right)", "name_he": "שריר שוקתי קדמי (ימין)",
+      "group": "lower_body", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_KNEE", "RIGHT_ANKLE"],
+      "surface_facing": "anterior",
+      "cutout_asset": "tibialis_anterior_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the leg, anterior view"
+    },
+    {
+      "id": "tibialis_anterior_l", "name": "Tibialis Anterior (left)", "name_he": "שריר שוקתי קדמי (שמאל)",
+      "group": "lower_body", "laterality": "left",
+      "anchor_landmarks": ["LEFT_KNEE", "LEFT_ANKLE"],
+      "surface_facing": "anterior",
+      "cutout_asset": "tibialis_anterior_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the leg, anterior view"
+    },
+    {
+      "id": "iliopsoas_r", "name": "Iliopsoas (right)", "name_he": "שריר כסל-מותני (ימין)",
+      "group": "lower_body", "laterality": "right",
+      "anchor_landmarks": ["RIGHT_HIP", "RIGHT_KNEE"],
+      "surface_facing": "anterior",
+      "cutout_asset": "iliopsoas_r.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the iliac region"
+    },
+    {
+      "id": "iliopsoas_l", "name": "Iliopsoas (left)", "name_he": "שריר כסל-מותני (שמאל)",
+      "group": "lower_body", "laterality": "left",
+      "anchor_landmarks": ["LEFT_HIP", "LEFT_KNEE"],
+      "surface_facing": "anterior",
+      "cutout_asset": "iliopsoas_l.png",
+      "source_plate_hint": "Gray's Anatomy (1918) - muscles of the iliac region"
+    }
+  ]
+}

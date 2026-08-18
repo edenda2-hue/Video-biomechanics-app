@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+models/*.task
+input/*
+!input/.gitkeep
+output/
+assets/anatomy/source/*
+!assets/anatomy/source/.gitkeep
+assets/anatomy/muscles/*.png
+!assets/anatomy/muscles/.gitkeep
+!assets/anatomy/muscles/*.json
+*.mp4
+*.mov
+*.avi
+.DS_Store
