@@ -71,23 +71,26 @@ Two gates, matching spec §5–6:
    ANATOMY slider (`ApproveAnatomyStep.tsx`) to approve or force a
    regeneration.
 
-## Running it
+## Running it locally
 
-Requires Node 22+, `ffmpeg`/`ffprobe` on `PATH`, and (for real generation)
-an OpenAI API key.
+Requires Node.js 22+ and `ffmpeg`/`ffprobe` on `PATH` (an OpenAI API key is
+optional — see below).
 
 ```bash
-npm install
+git clone https://github.com/edenda2-hue/Video-biomechanics-app.git
+cd Video-biomechanics-app
+git checkout claude/biomechanics-video-analysis-qa3xmg
 
-# optional — without this, anatomy/muscle generation uses an offline mock
-# so the whole pipeline still runs (see server/.env.example)
-cp server/.env.example server/.env && edit it
-
-npm run dev:server   # http://localhost:8787
-npm run dev:web      # http://localhost:5173 (proxies /api to the server)
+npm run setup   # checks Node/ffmpeg, installs deps, creates server/.env
+npm run dev     # starts the API (8787) and the web app (5173) together
 ```
 
-Open http://localhost:5173 and walk through the 9-step wizard.
+`npm run setup` fails fast with a clear message (and OS-specific install
+command) if Node or ffmpeg is missing. Open **http://localhost:5173** and
+walk through the 9-step wizard.
+
+To run the two halves separately instead: `npm run dev:server` and
+`npm run dev:web` in two terminals.
 
 ### Without an OpenAI key
 
