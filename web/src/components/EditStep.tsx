@@ -70,6 +70,7 @@ export default function EditStep({
   const maskedLayerRef = useRef<HTMLCanvasElement | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const [previewReady, setPreviewReady] = useState(false);
+  const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
   const [t, setT] = useState(0.3);
   const [playing, setPlaying] = useState(false);
   const rafRef = useRef<number | null>(null);
@@ -196,6 +197,12 @@ export default function EditStep({
           canvas.height = h;
         }
         setPreviewReady(true);
+        // Every time the anatomy image changes (new upload, nudge, or a
+        // frame change), auto-play the full effect once so it's watched
+        // before "Continue to Export" becomes available again.
+        setHasPlayedOnce(false);
+        setT(0);
+        setPlaying(true);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -273,7 +280,16 @@ export default function EditStep({
     let start: number | null = null;
     const step = (ts: number) => {
       if (start === null) start = ts;
-      setT(((ts - start) / 1000) % timeline.freezeDurationSec);
+      const elapsed = (ts - start) / 1000;
+      if (elapsed >= timeline.freezeDurationSec) {
+        // Completed one full watch-through: stop (don't loop silently) and
+        // unlock "Continue to Export" — this is the "approval" moment.
+        setT(timeline.freezeDurationSec);
+        setPlaying(false);
+        setHasPlayedOnce(true);
+        return;
+      }
+      setT(elapsed);
       rafRef.current = requestAnimationFrame(step);
     };
     rafRef.current = requestAnimationFrame(step);
@@ -286,6 +302,10 @@ export default function EditStep({
     try {
       const updated = await setTimeline(sessionId, patch);
       setTimelineState(updated);
+      // Timing changed since the last full watch-through: require re-approval.
+      setHasPlayedOnce(false);
+      setT(0);
+      setPlaying(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -583,8 +603,11 @@ export default function EditStep({
             </div>
           </div>
 
-          <div className="row" style={{ marginTop: 20 }}>
-            <button onClick={onContinue}>Continue to Export</button>
+          <div className="row" style={{ marginTop: 20, alignItems: "center" }}>
+            <button onClick={onContinue} disabled={!hasPlayedOnce}>
+              Approve & Continue to Export
+            </button>
+            {!hasPlayedOnce && <span className="muted">Watch the full preview above (playing automatically) to approve.</span>}
           </div>
         </>
       )}

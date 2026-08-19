@@ -2,6 +2,7 @@ import path from "node:path";
 import { Router } from "express";
 import { buildFreezeSequence, verticalBoundsFromPose } from "../lib/compositing.js";
 import { assembleFinalVideo, encodeImageSequence } from "../lib/ffmpeg.js";
+import { getJob, setJob } from "../lib/exportJobs.js";
 import { requireSession, sessionDir, updateSession, HttpError } from "../lib/storage.js";
 
 export const exportRouter = Router();
@@ -43,9 +44,13 @@ exportRouter.put("/sessions/:id/timeline", (req, res, next) => {
 });
 
 // STEP 9 (spec section 9-13, 15): render the freeze segment (body-only
-// transition, held highlighted anatomy, transition back) and splice it into
-// the original video, preserving original resolution/fps/aspect/audio.
-exportRouter.post("/sessions/:id/export", async (req, res, next) => {
+// transition, held anatomy, transition back) and splice it into the
+// (optionally trimmed) original video, preserving original resolution/fps/
+// aspect/audio. Runs as a background job (not held open on the HTTP
+// request) since it can take a while on a slow/shared CPU; the client polls
+// GET /export/status for progress instead of waiting on one long request
+// that could time out with no feedback.
+exportRouter.post("/sessions/:id/export", (req, res, next) => {
   try {
     const session = requireSession(req.params.id);
     const {
@@ -68,47 +73,95 @@ exportRouter.post("/sessions/:id/export", async (req, res, next) => {
     }
     if (!session.anatomyApproved) throw new HttpError(400, "Anatomy image must be approved before exporting");
 
-    const dir = sessionDir(session.id);
-    const seqDir = path.join(dir, "freeze_seq");
-    const holdSec = freezeDurationSec - transitionInSec - transitionOutSec;
+    setJob(session.id, { phase: "compositing", percent: 0, message: "Compositing the anatomy transition frames…" });
+    res.json({ jobId: session.id });
 
-    const { width, height } = await buildFreezeSequence({
-      originalFramePath,
-      maskPath,
-      anatomyImagePath,
-      fps: metadata.fps,
-      transitionInSec,
-      holdSec,
-      transitionOutSec,
-      outDir: seqDir,
-      style: "wipe",
-      verticalBounds: pose ? verticalBoundsFromPose(pose) : undefined,
-    });
+    (async () => {
+      try {
+        const dir = sessionDir(session.id);
+        const seqDir = path.join(dir, "freeze_seq");
+        const holdSec = freezeDurationSec - transitionInSec - transitionOutSec;
 
-    const freezeSegmentPath = path.join(dir, "freeze_segment.mp4");
-    await encodeImageSequence(path.join(seqDir, "frame_%05d.png"), metadata.fps, freezeSegmentPath);
+        await buildFreezeSequence(
+          {
+            originalFramePath,
+            maskPath,
+            anatomyImagePath,
+            fps: metadata.fps,
+            transitionInSec,
+            holdSec,
+            transitionOutSec,
+            outDir: seqDir,
+            style: "wipe",
+            verticalBounds: pose ? verticalBoundsFromPose(pose) : undefined,
+          },
+          (fraction) =>
+            setJob(session.id, {
+              phase: "compositing",
+              percent: Math.round(fraction * 50),
+              message: "Compositing the anatomy transition frames…",
+            }),
+        );
 
-    const outPath = path.join(dir, "export.mp4");
-    await assembleFinalVideo({
-      originalVideoPath,
-      freezeSegmentPath,
-      freezeSec,
-      freezeDurationSec,
-      trimStartSec,
-      trimEndSec,
-      metadata,
-      outPath,
-    });
+        const freezeSegmentPath = path.join(dir, "freeze_segment.mp4");
+        const expectedSeqFrames = Math.round(metadata.fps * freezeDurationSec);
+        await encodeImageSequence(path.join(seqDir, "frame_%05d.png"), metadata.fps, freezeSegmentPath, {
+          frameCount: expectedSeqFrames,
+          onProgress: (fraction) =>
+            setJob(session.id, {
+              phase: "encoding-segment",
+              percent: 50 + Math.round(fraction * 20),
+              message: "Encoding the freeze segment…",
+            }),
+        });
 
-    updateSession(session.id, {});
-    res.json({
-      downloadUrl: `/api/sessions/${session.id}/export/file`,
-      frameSize: { width, height },
-      durationSec: trimEndSec - trimStartSec + freezeDurationSec,
-    });
+        const outPath = path.join(dir, "export.mp4");
+        await assembleFinalVideo(
+          {
+            originalVideoPath,
+            freezeSegmentPath,
+            freezeSec,
+            freezeDurationSec,
+            trimStartSec,
+            trimEndSec,
+            metadata,
+            outPath,
+          },
+          (fraction) =>
+            setJob(session.id, {
+              phase: "assembling",
+              percent: 70 + Math.round(fraction * 30),
+              message: "Splicing into the original video…",
+            }),
+        );
+
+        updateSession(session.id, {});
+        setJob(session.id, {
+          phase: "done",
+          percent: 100,
+          message: "Done.",
+          downloadUrl: `/api/sessions/${session.id}/export/file`,
+        });
+      } catch (err) {
+        console.error(err);
+        setJob(session.id, {
+          phase: "error",
+          percent: 0,
+          message: "Export failed.",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
   } catch (err) {
     next(err);
   }
+});
+
+exportRouter.get("/sessions/:id/export/status", (req, res) => {
+  const session = requireSession(req.params.id);
+  const job = getJob(session.id);
+  if (!job) throw new HttpError(404, "No export in progress");
+  res.json(job);
 });
 
 exportRouter.get("/sessions/:id/export/file", (req, res, next) => {

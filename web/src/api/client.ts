@@ -131,8 +131,21 @@ export async function setTimeline(id: string, patch: Partial<TimelineState>): Pr
   );
 }
 
-export async function exportVideo(id: string): Promise<{ downloadUrl: string; durationSec: number }> {
+/** Starts the export render as a background job; poll getExportStatus for progress. */
+export async function startExport(id: string): Promise<{ jobId: string }> {
   return handle(await fetch(`${BASE}/sessions/${id}/export`, { method: "POST" }));
+}
+
+export interface ExportJobStatus {
+  phase: "compositing" | "encoding-segment" | "assembling" | "done" | "error";
+  percent: number;
+  message: string;
+  error?: string;
+  downloadUrl?: string;
+}
+
+export async function getExportStatus(id: string): Promise<ExportJobStatus> {
+  return handle(await fetch(`${BASE}/sessions/${id}/export/status`));
 }
 
 export interface AnatomyNudgeDelta {

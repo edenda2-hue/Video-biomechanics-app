@@ -96,6 +96,24 @@ rendering the final MP4. Trim (`trimStartSec`/`trimEndSec`, applied at
 export time) lets the exported clip cover only part of the source video;
 `freezeSec` must fall within the trimmed range.
 
+**Approving the preview.** Every time the anatomy image, alignment, or
+timing changes, the Edit screen auto-plays the full effect once; "Approve &
+Continue to Export" stays disabled until that watch-through completes, so
+you always see the whole thing (not just whatever frame you happened to
+scrub to) before committing to a render.
+
+**Export runs as a background job**, not one blocking HTTP request: the
+compositing loop reports real per-frame progress, and the two ffmpeg passes
+(encoding the freeze segment, splicing it into the source) report progress
+parsed from ffmpeg's own `-stats` output. The Export screen polls
+`GET /sessions/:id/export/status` and shows a progress bar with the current
+phase, so a slow render (e.g. on a free-tier shared CPU) is visibly
+progressing instead of looking hung. `lib/compositing.ts` also renders each
+distinct "hold" frame once and copies the file for the rest, since every
+hold-phase frame is pixel-identical — a multi-second hold no longer means
+redoing the same compositing work for every one of the ~30-150 frames it
+spans.
+
 ## The AI edit chat
 
 Rather than only exposing raw parameter fields, the Edit screen has a chat
@@ -197,9 +215,10 @@ network access to the model CDN.
 - `server/scripts/e2e-smoke.mjs` drives the entire backend pipeline (upload
   → confirm frame → submit pose/mask → upload an anatomy image → exercise
   the chat endpoint for hold-duration/nudge/trim/freeze-point changes →
-  export) against a synthetic ffmpeg-generated test video, then verifies
-  the exported MP4's resolution/fps/duration/audio with `ffprobe`. Run with
-  the server up: `node server/scripts/e2e-smoke.mjs`.
+  start the async export job → poll its status to completion) against a
+  synthetic ffmpeg-generated test video, then verifies the exported MP4's
+  resolution/fps/duration/audio with `ffprobe`. Run with the server up:
+  `node server/scripts/e2e-smoke.mjs`.
 - `npm run typecheck` (root) typechecks both packages.
 
 ## Known limitations

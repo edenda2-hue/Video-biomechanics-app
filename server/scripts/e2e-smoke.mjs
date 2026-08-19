@@ -93,9 +93,24 @@ async function main() {
   console.log("6c. re-submitting pose/mask for the frame chat moved us to (stand-in for the browser CV Engine re-running)...");
   await postJson(`/sessions/${sessionId}/pose`, { pose, maskPngBase64 });
 
-  console.log("7. exporting final video (wipe transition, trimmed to [0, 2.5]s)...");
-  const exported = await postJson(`/sessions/${sessionId}/export`, {});
-  console.log("   ", exported);
+  console.log("7. starting async export job (wipe transition, trimmed to [0, 2.5]s)...");
+  const started = await postJson(`/sessions/${sessionId}/export`, {});
+  console.log("   ", started);
+  assert(started.jobId === sessionId, "export returns a jobId immediately (doesn't block on rendering)");
+
+  console.log("7b. polling export status until done...");
+  let job;
+  const deadline = Date.now() + 60_000;
+  const seenPhases = new Set();
+  while (Date.now() < deadline) {
+    job = await checkOk(await fetch(`${BASE}/sessions/${sessionId}/export/status`));
+    seenPhases.add(job.phase);
+    if (job.phase === "done" || job.phase === "error") break;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  console.log("    final job status:", job);
+  assert(job.phase === "done", `export job completed successfully (got: ${job.phase} - ${job.error ?? ""})`);
+  assert(seenPhases.has("compositing"), "observed the compositing phase while polling");
 
   const outPath = path.join(TMP, "export.mp4");
   const resp = await fetch(`${BASE}/sessions/${sessionId}/export/file`);

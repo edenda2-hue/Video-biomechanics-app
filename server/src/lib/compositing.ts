@@ -38,7 +38,10 @@ export interface FreezeSequenceOptions {
  * #9/#12 ("only the human body transforms; camera, background, equipment,
  * lighting never move or change").
  */
-export async function buildFreezeSequence(opts: FreezeSequenceOptions): Promise<{ frameCount: number; width: number; height: number }> {
+export async function buildFreezeSequence(
+  opts: FreezeSequenceOptions,
+  onProgress?: (fraction: number) => void,
+): Promise<{ frameCount: number; width: number; height: number }> {
   const { originalFramePath, maskPath, anatomyImagePath, fps, transitionInSec, holdSec, transitionOutSec, outDir } = opts;
   const style = opts.style ?? "wipe";
   await fs.mkdir(outDir, { recursive: true });
@@ -64,21 +67,34 @@ export async function buildFreezeSequence(opts: FreezeSequenceOptions): Promise<
   const bounds = opts.verticalBounds ?? { top: 0.05, bottom: 0.95 };
 
   let index = 0;
+  let holdFramePath: string | null = null;
   for (const spec of specs) {
-    const frame =
-      spec.phase !== "hold" && style === "wipe"
-        ? blendFrameWipe(originalBuf, anatomyBuf, maskBuf, width, height, bounds, spec.phase, spec.t)
-        : blendFrame(
-            originalBuf,
-            anatomyBuf,
-            maskBuf,
-            spec.phase === "in" ? smoothstep(spec.t) : spec.phase === "out" ? 1 - smoothstep(spec.t) : 1,
-            width,
-            height,
-          );
     const outPath = path.join(outDir, `frame_${String(index).padStart(5, "0")}.png`);
-    await sharp(frame, { raw: { width, height, channels: 4 } }).png().toFile(outPath);
+
+    // Every "hold" frame is pixel-identical (alpha=1 everywhere); render it
+    // once and copy the file for the rest instead of re-running the blend
+    // and PNG encode per frame — a hold of several seconds is otherwise a
+    // lot of redundant work on a slow/shared CPU.
+    if (spec.phase === "hold" && holdFramePath) {
+      await fs.copyFile(holdFramePath, outPath);
+    } else {
+      const frame =
+        spec.phase !== "hold" && style === "wipe"
+          ? blendFrameWipe(originalBuf, anatomyBuf, maskBuf, width, height, bounds, spec.phase, spec.t)
+          : blendFrame(
+              originalBuf,
+              anatomyBuf,
+              maskBuf,
+              spec.phase === "in" ? smoothstep(spec.t) : spec.phase === "out" ? 1 - smoothstep(spec.t) : 1,
+              width,
+              height,
+            );
+      await sharp(frame, { raw: { width, height, channels: 4 } }).png().toFile(outPath);
+      if (spec.phase === "hold") holdFramePath = outPath;
+    }
+
     index++;
+    onProgress?.(index / specs.length);
   }
 
   return { frameCount: specs.length, width, height };
