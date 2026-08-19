@@ -8,7 +8,9 @@ export const DATA_DIR = path.resolve(__dirname, "../data");
 export const SESSIONS_DIR = path.join(DATA_DIR, "sessions");
 
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-export const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-1";
+// gpt-image-1 is deprecating 2026-10-23; gpt-image-2 is the current
+// recommended images.edit model (same mask-based edit API shape).
+export const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-2";
 export const OPENAI_TEXT_MODEL = process.env.OPENAI_TEXT_MODEL ?? "gpt-4.1";
 
 // Quality gate thresholds (section 5 of the spec: "Quality Score").
