@@ -1,0 +1,276 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0d12;
+  --panel: #151822;
+  --panel-2: #1c202c;
+  --border: #2a2f3d;
+  --text: #e8eaf0;
+  --muted: #8a90a2;
+  --accent: #8b0000;
+  --accent-bright: #d1495b;
+  --ok: #3ecf8e;
+  --warn: #e0a63e;
+  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  padding: 20px 32px;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.app-header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.app-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  max-width: 980px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px 24px 64px;
+  gap: 24px;
+}
+
+.stepper {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.step-chip {
+  flex: 1;
+  min-width: 96px;
+  text-align: center;
+  padding: 8px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.step-chip.active {
+  border-color: var(--accent-bright);
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+.step-chip.done {
+  color: var(--ok);
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.card h2 {
+  margin-top: 0;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--accent-bright);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+button.secondary:hover:not(:disabled) {
+  border-color: var(--accent-bright);
+  background: transparent;
+}
+
+input[type="text"],
+input[type="range"],
+input[type="number"] {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+input[type="range"] {
+  flex: 1;
+}
+
+.error-box {
+  background: #3a1414;
+  border: 1px solid #6b1f1f;
+  color: #ffb4b4;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.frame-preview {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  display: block;
+}
+
+.compare-wrap {
+  position: relative;
+  max-width: 640px;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  user-select: none;
+}
+
+.compare-wrap img {
+  display: block;
+  width: 100%;
+}
+
+.compare-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent-bright);
+}
+
+.muscle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.muscle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.muscle-row select,
+.muscle-row input[type="text"] {
+  background: transparent;
+  border: none;
+  color: var(--text);
+}
+
+.role-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  text-transform: capitalize;
+}
+
+.spinner-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-bright);
+  animation: pulse 1s infinite ease-in-out;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.quality-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.quality-tile {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.quality-tile .label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.quality-tile .value {
+  font-size: 20px;
+  font-weight: 600;
+}
