@@ -21,10 +21,10 @@ export default function ExportStep({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="card">
-      <h2>9. Export</h2>
+      <h2>5. Export</h2>
       <p className="muted">
-        Renders the freeze segment (body-only transition in, held anatomy + muscle analysis, transition back out) and
-        splices it into the original video, preserving original resolution, FPS, aspect ratio and audio.
+        Renders the freeze segment (body-only wipe transition in, held anatomy, wipe transition back out) and splices
+        it into the original video, preserving original resolution, FPS, aspect ratio and audio.
       </p>
 
       <div className="row">

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Router } from "express";
-import { buildFreezeSequence } from "../lib/compositing.js";
+import { buildFreezeSequence, verticalBoundsFromPose } from "../lib/compositing.js";
 import { assembleFinalVideo, encodeImageSequence } from "../lib/ffmpeg.js";
 import { requireSession, sessionDir, updateSession, HttpError } from "../lib/storage.js";
 
@@ -39,17 +39,19 @@ exportRouter.post("/sessions/:id/export", async (req, res, next) => {
       originalVideoPath,
       originalFramePath,
       maskPath,
-      highlightImagePath,
+      anatomyImagePath,
       metadata,
       freezeSec,
       freezeDurationSec,
       transitionInSec,
       transitionOutSec,
+      pose,
     } = session;
 
-    if (!originalFramePath || !maskPath || !highlightImagePath || !metadata || freezeSec === undefined) {
-      throw new HttpError(400, "Approve anatomy and generate the muscle highlight before exporting");
+    if (!originalFramePath || !maskPath || !anatomyImagePath || !metadata || freezeSec === undefined) {
+      throw new HttpError(400, "Upload and approve the anatomy image before exporting");
     }
+    if (!session.anatomyApproved) throw new HttpError(400, "Anatomy image must be approved before exporting");
 
     const dir = sessionDir(session.id);
     const seqDir = path.join(dir, "freeze_seq");
@@ -58,12 +60,14 @@ exportRouter.post("/sessions/:id/export", async (req, res, next) => {
     const { width, height } = await buildFreezeSequence({
       originalFramePath,
       maskPath,
-      anatomyImagePath: highlightImagePath,
+      anatomyImagePath,
       fps: metadata.fps,
       transitionInSec,
       holdSec,
       transitionOutSec,
       outDir: seqDir,
+      style: "wipe",
+      verticalBounds: pose ? verticalBoundsFromPose(pose) : undefined,
     });
 
     const freezeSegmentPath = path.join(dir, "freeze_segment.mp4");

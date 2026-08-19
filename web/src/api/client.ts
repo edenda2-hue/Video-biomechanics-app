@@ -47,6 +47,17 @@ export async function submitPose(id: string, pose: PoseKeypoint[], maskPngBase64
   );
 }
 
+/** Uploads an already client-aligned anatomy image (see cv/alignment.ts) as the session's anatomy frame. */
+export async function uploadAnatomyImage(id: string, imagePngBase64: string): Promise<{ imageUrl: string }> {
+  return handle(
+    await fetch(`${BASE}/sessions/${id}/anatomy/upload`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ imagePngBase64 }),
+    }),
+  );
+}
+
 export async function generateAnatomy(
   id: string,
   exerciseName: string | undefined,

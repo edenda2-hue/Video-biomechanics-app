@@ -1,22 +1,33 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import type { LabelPlacement } from "../types.js";
+import type { LabelPlacement, PoseKeypoint } from "../types.js";
 
 function smoothstep(t: number): number {
   const c = Math.min(1, Math.max(0, t));
   return c * c * (3 - 2 * c);
 }
 
+/** Normalized [top, bottom] vertical extent of the person, for the wipe transition's sweep geometry. */
+export function verticalBoundsFromPose(pose: PoseKeypoint[]): { top: number; bottom: number } {
+  const ys = pose.filter((k) => k.confidence >= 0.3).map((k) => k.y);
+  if (ys.length === 0) return { top: 0.05, bottom: 0.95 };
+  return { top: Math.min(...ys), bottom: Math.max(...ys) };
+}
+
 export interface FreezeSequenceOptions {
   originalFramePath: string;
   maskPath: string;
-  anatomyImagePath: string; // final anatomy frame (highlight + labels already baked in)
+  anatomyImagePath: string;
   fps: number;
   transitionInSec: number;
   holdSec: number;
   transitionOutSec: number;
   outDir: string;
+  /** "wipe" sweeps head-to-foot (the anatomy "puts itself on"); "dissolve" is a uniform crossfade. */
+  style?: "wipe" | "dissolve";
+  /** Normalized [0,1] vertical extent of the person, required for "wipe". */
+  verticalBounds?: { top: number; bottom: number };
 }
 
 /**
@@ -29,6 +40,7 @@ export interface FreezeSequenceOptions {
  */
 export async function buildFreezeSequence(opts: FreezeSequenceOptions): Promise<{ frameCount: number; width: number; height: number }> {
   const { originalFramePath, maskPath, anatomyImagePath, fps, transitionInSec, holdSec, transitionOutSec, outDir } = opts;
+  const style = opts.style ?? "wipe";
   await fs.mkdir(outDir, { recursive: true });
 
   const original = sharp(originalFramePath);
@@ -43,20 +55,76 @@ export async function buildFreezeSequence(opts: FreezeSequenceOptions): Promise<
   const holdFrames = Math.max(1, Math.round(fps * holdSec));
   const outFrames = Math.max(1, Math.round(fps * transitionOutSec));
 
-  const alphas: number[] = [];
-  for (let i = 0; i < inFrames; i++) alphas.push(smoothstep(i / (inFrames - 1 || 1)));
-  for (let i = 0; i < holdFrames; i++) alphas.push(1);
-  for (let i = 0; i < outFrames; i++) alphas.push(1 - smoothstep(i / (outFrames - 1 || 1)));
+  type FrameSpec = { phase: "in" | "hold" | "out"; t: number };
+  const specs: FrameSpec[] = [];
+  for (let i = 0; i < inFrames; i++) specs.push({ phase: "in", t: i / (inFrames - 1 || 1) });
+  for (let i = 0; i < holdFrames; i++) specs.push({ phase: "hold", t: 1 });
+  for (let i = 0; i < outFrames; i++) specs.push({ phase: "out", t: i / (outFrames - 1 || 1) });
+
+  const bounds = opts.verticalBounds ?? { top: 0.05, bottom: 0.95 };
 
   let index = 0;
-  for (const alpha of alphas) {
-    const frame = blendFrame(originalBuf, anatomyBuf, maskBuf, alpha, width, height);
+  for (const spec of specs) {
+    const frame =
+      spec.phase !== "hold" && style === "wipe"
+        ? blendFrameWipe(originalBuf, anatomyBuf, maskBuf, width, height, bounds, spec.phase, spec.t)
+        : blendFrame(
+            originalBuf,
+            anatomyBuf,
+            maskBuf,
+            spec.phase === "in" ? smoothstep(spec.t) : spec.phase === "out" ? 1 - smoothstep(spec.t) : 1,
+            width,
+            height,
+          );
     const outPath = path.join(outDir, `frame_${String(index).padStart(5, "0")}.png`);
     await sharp(frame, { raw: { width, height, channels: 4 } }).png().toFile(outPath);
     index++;
   }
 
-  return { frameCount: alphas.length, width, height };
+  return { frameCount: specs.length, width, height };
+}
+
+/**
+ * A head-to-foot "wipe" reveal: a horizontal line sweeps from the top of
+ * the person (`bounds.top`) to the bottom (`bounds.bottom`) as `t` goes
+ * 0->1. In phase "in", rows above the line become anatomy (the figure
+ * "puts itself on" from the head down); in phase "out" the same sweep
+ * direction instead reveals the original body again. The sweep overshoots
+ * half a feather band on each side so it reaches full coverage/clearance
+ * exactly at t=1, matching the flat alpha=1 hold phase with no visible pop.
+ */
+function blendFrameWipe(
+  originalBuf: Buffer,
+  anatomyBuf: Buffer,
+  maskBuf: Buffer,
+  width: number,
+  height: number,
+  bounds: { top: number; bottom: number },
+  phase: "in" | "out",
+  t: number,
+): Buffer {
+  const span = Math.max(1e-3, bounds.bottom - bounds.top);
+  const feather = span * 0.12;
+  const threshold = bounds.top - feather / 2 + t * (span + feather);
+
+  const out = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const ny = y / height;
+    const local = (threshold - ny) / feather + 0.5;
+    const covered = smoothstep(local); // 1 = swept over (anatomy side), 0 = not yet (original side)
+    const rowAlpha = phase === "in" ? covered : 1 - covered;
+    const rowStart = y * width;
+    for (let x = 0; x < width; x++) {
+      const p = rowStart + x;
+      const m = (maskBuf[p] / 255) * rowAlpha;
+      const o = p * 4;
+      for (let c = 0; c < 3; c++) {
+        out[o + c] = Math.round(originalBuf[o + c] * (1 - m) + anatomyBuf[o + c] * m);
+      }
+      out[o + 3] = 255;
+    }
+  }
+  return out;
 }
 
 /** result = original * (1 - mask*alpha) + anatomy * (mask*alpha), computed per-pixel in raw RGBA space. */

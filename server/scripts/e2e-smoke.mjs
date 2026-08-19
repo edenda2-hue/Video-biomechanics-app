@@ -1,8 +1,8 @@
-// Manual smoke test for the backend pipeline, using a synthetic video and a
-// fabricated pose/mask (standing in for the client-side CV Engine) so the
-// whole flow (frame extraction -> mock anatomy -> quality gate -> muscle
-// analysis -> highlight -> export) can be exercised without a browser or an
-// OpenAI API key. Run with: node scripts/e2e-smoke.mjs
+// Manual smoke test for the backend pipeline's primary flow: upload video
+// -> confirm frame -> submit pose/mask (standing in for the client-side CV
+// Engine) -> upload a manually-created (pre-aligned) anatomy image -> set
+// timeline -> export, then verify the exported MP4 with ffprobe.
+// Run with: node scripts/e2e-smoke.mjs
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -52,53 +52,24 @@ async function main() {
   const freezeSec = 1.0;
   await postJson(`/sessions/${sessionId}/frame`, { timeSec: freezeSec });
 
-  console.log("4. submitting synthetic pose + segmentation mask...");
+  console.log("4. submitting synthetic pose + segmentation mask (stand-in for browser CV Engine)...");
   const pose = fakePose();
   const maskPngBase64 = (await fakeMask()).toString("base64");
   await postJson(`/sessions/${sessionId}/pose`, { pose, maskPngBase64 });
 
-  console.log("5. generating anatomy candidate (mock provider expected without OPENAI_API_KEY)...");
-  const gen = await postJson(`/sessions/${sessionId}/anatomy/generate`, { exerciseName: "front lever" });
-  console.log("   provider:", gen.provider, "attempt:", gen.attempt);
-  assert(gen.provider === "mock", "mock provider should be selected without an API key");
+  console.log("5. uploading a manually-created anatomy image (stand-in for the client-aligned upload)...");
+  const anatomyPngBase64 = (await fakeAnatomyImage()).toString("base64");
+  const uploaded = await postJson(`/sessions/${sessionId}/anatomy/upload`, { imagePngBase64: anatomyPngBase64 });
+  console.log("   ", uploaded);
 
-  console.log("6. running quality gate (candidate pose == original pose -> should pass)...");
-  const qc = await postJson(`/sessions/${sessionId}/anatomy/quality-check`, { candidatePose: pose });
-  console.log("   quality:", qc.quality);
-  assert(qc.quality.passed, "quality gate should pass for a geometry-preserving mock candidate");
-
-  console.log("7. approving anatomy...");
-  await postJson(`/sessions/${sessionId}/anatomy/approve`, {});
-
-  console.log("8. analyzing muscles...");
-  const analysis = await postJson(`/sessions/${sessionId}/muscles/analyze`, { exerciseName: "front lever" });
-  console.log(
-    "   muscles:",
-    analysis.muscles.map((m) => m.name),
-  );
-  assert(analysis.muscles.length > 0, "at least one muscle suggested");
-
-  console.log("9. approving muscle selection as-is...");
-  await fetch(`${BASE}/sessions/${sessionId}/muscles`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ muscles: analysis.muscles }),
-  }).then(checkOk);
-
-  console.log("10. generating muscle highlight + labels...");
-  const highlight = await postJson(`/sessions/${sessionId}/highlight`, {});
-  console.log("    labels:", highlight.labels.map((l) => `${l.name}@(${l.labelPos.x.toFixed(2)},${l.labelPos.y.toFixed(2)})`));
-  assert(highlight.labels.length === analysis.muscles.length, "one label per selected muscle");
-  assertNoOverlap(highlight.labels);
-
-  console.log("11. setting preview timeline (freeze=2s, transitions=0.4s each)...");
+  console.log("6. setting preview timeline (freeze=2s, transitions=0.4s each)...");
   await fetch(`${BASE}/sessions/${sessionId}/timeline`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ freezeDurationSec: 2, transitionInSec: 0.4, transitionOutSec: 0.4 }),
   }).then(checkOk);
 
-  console.log("12. exporting final video...");
+  console.log("7. exporting final video (wipe transition)...");
   const exported = await postJson(`/sessions/${sessionId}/export`, {});
   console.log("   ", exported);
 
@@ -107,7 +78,7 @@ async function main() {
   await checkOk(resp);
   await fs.writeFile(outPath, Buffer.from(await resp.arrayBuffer()));
 
-  console.log("13. verifying exported file with ffprobe...");
+  console.log("8. verifying exported file with ffprobe...");
   const { stdout } = await run("ffprobe", [
     "-v",
     "error",
@@ -167,15 +138,15 @@ async function fakeMask() {
   return sharp(Buffer.from(svg)).png().toBuffer();
 }
 
-function assertNoOverlap(labels) {
-  const bySide = { left: [], right: [] };
-  for (const l of labels) bySide[l.labelPos.x < 0.5 ? "left" : "right"].push(l.labelPos.y);
-  for (const side of Object.values(bySide)) {
-    side.sort((a, b) => a - b);
-    for (let i = 1; i < side.length; i++) {
-      assert(side[i] - side[i - 1] > 0.01, "labels on the same side must not collide vertically");
-    }
-  }
+async function fakeAnatomyImage() {
+  // Stands in for a manually-created, already-aligned anatomy image: same
+  // dimensions as the frame, a distinct color inside the person ellipse so
+  // the wipe/compositing effect is visually verifiable.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH}" height="${HEIGHT}">
+    <rect width="100%" height="100%" fill="black" />
+    <ellipse cx="${WIDTH * 0.5}" cy="${HEIGHT * 0.5}" rx="${WIDTH * 0.16}" ry="${HEIGHT * 0.42}" fill="#8b0000" />
+  </svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
 }
 
 async function postJson(p, body) {

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { Router } from "express";
 import { getProvider } from "../lib/openai/index.js";
@@ -8,6 +9,30 @@ import { MAX_REGENERATE_ATTEMPTS } from "../config.js";
 import type { PoseKeypoint } from "../types.js";
 
 export const anatomyRouter = Router();
+
+// Primary flow: the user creates the anatomical image themselves (in
+// ChatGPT or any other tool) and aligns it client-side (see
+// web/src/cv/alignment.ts) against the confirmed frame's pose before
+// uploading the already-aligned result here. This sidesteps OpenAI image
+// generation (and its cost) entirely; the /generate + /quality-check
+// routes above stay available as an alternate, AI-driven path.
+anatomyRouter.post("/sessions/:id/anatomy/upload", async (req, res, next) => {
+  try {
+    const session = requireSession(req.params.id);
+    if (!session.originalFramePath) throw new HttpError(400, "Confirm a frame first");
+
+    const imagePngBase64 = req.body?.imagePngBase64 as string | undefined;
+    if (!imagePngBase64) throw new HttpError(400, "imagePngBase64 is required");
+
+    const outPath = path.join(sessionDir(session.id), "anatomy_manual.png");
+    await fs.writeFile(outPath, Buffer.from(imagePngBase64.replace(/^data:image\/png;base64,/, ""), "base64"));
+
+    updateSession(session.id, { anatomyImagePath: outPath, anatomyApproved: true });
+    res.json({ imageUrl: `/api/sessions/${session.id}/anatomy?ts=${Date.now()}` });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // STEP 3/4 (spec section 4): OpenAI turns the confirmed frame + mask + pose
 // into the anatomical figure using the fixed anatomy instruction.

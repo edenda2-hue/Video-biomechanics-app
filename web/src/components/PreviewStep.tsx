@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { setTimeline } from "../api/client";
+import { verticalBounds } from "../cv/alignment";
+import type { PoseKeypoint } from "../types";
 
 function smoothstep(t: number) {
   const c = Math.min(1, Math.max(0, t));
@@ -9,15 +11,17 @@ function smoothstep(t: number) {
 export default function PreviewStep({
   sessionId,
   originalFrameUrl,
-  highlightImageUrl,
+  anatomyImageUrl,
   maskUrl,
+  pose,
   initial,
   onContinue,
 }: {
   sessionId: string;
   originalFrameUrl: string;
-  highlightImageUrl: string;
+  anatomyImageUrl: string;
   maskUrl: string;
+  pose: PoseKeypoint[];
   initial: { freezeDurationSec: number; transitionInSec: number; transitionOutSec: number };
   onContinue: () => void;
 }) {
@@ -33,16 +37,18 @@ export default function PreviewStep({
   const [error, setError] = useState<string | null>(null);
   const rafRef = useRef<number | null>(null);
 
+  const bounds = verticalBounds(pose);
+
   // Build the "anatomy masked by person silhouette" layer once: RGB from the
-  // highlight image, alpha from the segmentation mask's luminance. This is
+  // anatomy image, alpha from the segmentation mask's luminance. This is
   // the same blend the Video Engine performs server-side (lib/compositing.ts).
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [original, highlight, mask] = await Promise.all([
+        const [original, anatomy, mask] = await Promise.all([
           loadImage(originalFrameUrl),
-          loadImage(highlightImageUrl),
+          loadImage(anatomyImageUrl),
           loadImage(maskUrl),
         ]);
         if (cancelled) return;
@@ -57,17 +63,17 @@ export default function PreviewStep({
         maskCanvas.getContext("2d")!.drawImage(mask, 0, 0, w, h);
         const maskData = maskCanvas.getContext("2d")!.getImageData(0, 0, w, h);
 
-        const highlightCanvas = document.createElement("canvas");
-        highlightCanvas.width = w;
-        highlightCanvas.height = h;
-        highlightCanvas.getContext("2d")!.drawImage(highlight, 0, 0, w, h);
-        const highlightData = highlightCanvas.getContext("2d")!.getImageData(0, 0, w, h);
+        const anatomyCanvas = document.createElement("canvas");
+        anatomyCanvas.width = w;
+        anatomyCanvas.height = h;
+        anatomyCanvas.getContext("2d")!.drawImage(anatomy, 0, 0, w, h);
+        const anatomyData = anatomyCanvas.getContext("2d")!.getImageData(0, 0, w, h);
 
-        const out = highlightCanvas.getContext("2d")!.createImageData(w, h);
+        const out = anatomyCanvas.getContext("2d")!.createImageData(w, h);
         for (let p = 0; p < w * h; p++) {
-          out.data[p * 4] = highlightData.data[p * 4];
-          out.data[p * 4 + 1] = highlightData.data[p * 4 + 1];
-          out.data[p * 4 + 2] = highlightData.data[p * 4 + 2];
+          out.data[p * 4] = anatomyData.data[p * 4];
+          out.data[p * 4 + 1] = anatomyData.data[p * 4 + 1];
+          out.data[p * 4 + 2] = anatomyData.data[p * 4 + 2];
           out.data[p * 4 + 3] = maskData.data[p * 4]; // luminance channel as alpha
         }
 
@@ -88,7 +94,38 @@ export default function PreviewStep({
     return () => {
       cancelled = true;
     };
-  }, [originalFrameUrl, highlightImageUrl, maskUrl]);
+  }, [originalFrameUrl, anatomyImageUrl, maskUrl]);
+
+  /** Builds the masked anatomy layer further clipped to a head-to-foot wipe band (mirrors server's blendFrameWipe). */
+  function wipeLayer(masked: HTMLCanvasElement, phase: "in" | "hold" | "out", phaseT: number): HTMLCanvasElement {
+    const { width, height } = masked;
+    if (phase === "hold") return masked;
+
+    const span = Math.max(1e-3, bounds.bottom - bounds.top);
+    const feather = span * 0.12;
+    const thresholdNorm = bounds.top - feather / 2 + phaseT * (span + feather);
+    const threshold = thresholdNorm * height;
+    const featherPx = feather * height;
+
+    const tmp = document.createElement("canvas");
+    tmp.width = width;
+    tmp.height = height;
+    const tctx = tmp.getContext("2d")!;
+    tctx.drawImage(masked, 0, 0);
+    tctx.globalCompositeOperation = "destination-in";
+    const grad = tctx.createLinearGradient(0, threshold - featherPx / 2, 0, threshold + featherPx / 2);
+    if (phase === "in") {
+      grad.addColorStop(0, "rgba(255,255,255,1)");
+      grad.addColorStop(1, "rgba(255,255,255,0)");
+    } else {
+      grad.addColorStop(0, "rgba(255,255,255,0)");
+      grad.addColorStop(1, "rgba(255,255,255,1)");
+    }
+    tctx.fillStyle = grad;
+    tctx.fillRect(0, 0, width, height);
+    tctx.globalCompositeOperation = "source-over";
+    return tmp;
+  }
 
   function draw(currentT: number) {
     const canvas = canvasRef.current;
@@ -97,22 +134,24 @@ export default function PreviewStep({
     if (!canvas || !original || !masked) return;
     const ctx = canvas.getContext("2d")!;
 
-    let alpha: number;
+    let phase: "in" | "hold" | "out";
+    let phaseT: number;
     if (currentT < transitionInSec) {
-      alpha = smoothstep(currentT / (transitionInSec || 1));
+      phase = "in";
+      phaseT = smoothstep(currentT / (transitionInSec || 1));
     } else if (currentT < freezeDurationSec - transitionOutSec) {
-      alpha = 1;
+      phase = "hold";
+      phaseT = 1;
     } else {
-      const outT = (currentT - (freezeDurationSec - transitionOutSec)) / (transitionOutSec || 1);
-      alpha = 1 - smoothstep(outT);
+      phase = "out";
+      phaseT = smoothstep((currentT - (freezeDurationSec - transitionOutSec)) / (transitionOutSec || 1));
     }
 
+    const layer = wipeLayer(masked, phase, phaseT);
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.globalAlpha = 1;
     ctx.drawImage(original, 0, 0, canvas.width, canvas.height);
-    ctx.globalAlpha = alpha;
-    ctx.drawImage(masked, 0, 0, canvas.width, canvas.height);
-    ctx.globalAlpha = 1;
+    ctx.drawImage(layer, 0, 0, canvas.width, canvas.height);
   }
 
   useEffect(() => {
@@ -148,10 +187,10 @@ export default function PreviewStep({
 
   return (
     <div className="card">
-      <h2>8. Preview</h2>
+      <h2>4. Preview</h2>
       <p className="muted">
-        Only the human body transforms — the camera, background, equipment, and lighting never move. Scrub or play
-        the freeze window to preview the body-only transition before exporting.
+        Only the human body transforms — the camera, background, equipment, and lighting never move. The anatomy
+        sweeps on head-to-foot, holds, then sweeps back off the same way. Scrub or play to preview before exporting.
       </p>
 
       <canvas ref={canvasRef} className="frame-preview" style={{ maxHeight: 420, width: "100%" }} />
