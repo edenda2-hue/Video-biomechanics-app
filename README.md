@@ -92,6 +92,28 @@ walk through the 9-step wizard.
 To run the two halves separately instead: `npm run dev:server` and
 `npm run dev:web` in two terminals.
 
+## Deploying it as a hosted web app (no local install)
+
+`Dockerfile` + `render.yaml` package the API and the built web app into a
+single container that serves both on one port, for a one-click deploy to
+[Render](https://render.com)'s free web-service tier (no credit card
+required; free instances sleep after 15 min idle and cold-start in
+30–60s on the next visit).
+
+1. Go to Render, sign in/sign up (GitHub login is easiest).
+2. New → Blueprint → connect the `edenda2-hue/Video-biomechanics-app`
+   repo, branch `claude/biomechanics-video-analysis-qa3xmg`.
+3. Render reads `render.yaml` automatically and proposes one free web
+   service. Confirm.
+4. (Optional) In the service's Environment tab, add `OPENAI_API_KEY` to
+   enable real generation — without it, the app runs in offline demo mode.
+5. Wait for the build to finish, then open the `https://<name>.onrender.com`
+   URL it gives you.
+
+Note: the free instance's disk is not persistent across restarts/redeploys —
+download your exported video promptly rather than relying on it staying on
+the server.
+
 ### Without an OpenAI key
 
 `server/src/lib/openai/mockProvider.ts` is a deterministic, offline stand-in

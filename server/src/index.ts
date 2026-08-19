@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express from "express";
 import { DATA_DIR, PORT, SESSIONS_DIR } from "./config.js";
@@ -24,6 +26,19 @@ app.use("/api", anatomyRouter);
 app.use("/api", musclesRouter);
 app.use("/api", highlightRouter);
 app.use("/api", exportRouter);
+
+// Single-service deployment (see Dockerfile / render.yaml): if a built web
+// app is present, serve it from the same process/port as the API so the
+// whole thing deploys as one free web service with one public URL.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WEB_DIST = process.env.WEB_DIST_PATH
+  ? path.resolve(process.env.WEB_DIST_PATH)
+  : path.resolve(__dirname, "../../web/dist");
+if (fs.existsSync(path.join(WEB_DIST, "index.html"))) {
+  app.use(express.static(WEB_DIST));
+  app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(path.join(WEB_DIST, "index.html")));
+  console.log(`[server] serving web build from ${WEB_DIST}`);
+}
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (err instanceof HttpError) {

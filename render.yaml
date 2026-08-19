@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: video-biomechanics-app
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      # Leave unset to run in offline demo mode; add a real key later in the
+      # Render dashboard (Environment tab) to enable real anatomy generation.
+      - key: OPENAI_API_KEY
+        sync: false
