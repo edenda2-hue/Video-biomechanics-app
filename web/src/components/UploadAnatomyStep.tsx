@@ -23,7 +23,7 @@ export default function UploadAnatomyStep({
   const [originalPose, setOriginalPose] = useState<PoseKeypoint[] | null>(null);
   const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null);
   const [autoTransform, setAutoTransform] = useState<AffineTransform>(IDENTITY_TRANSFORM);
-  const [matchInfo, setMatchInfo] = useState<{ matchedPoints: number; rmsError: number } | null>(null);
+  const [matchInfo, setMatchInfo] = useState<{ matchedPoints: number; candidatePoints: number; rmsError: number } | null>(null);
   const [adjust, setAdjust] = useState(DEFAULT_ADJUST);
   const [percent, setPercent] = useState(50);
   const [busy, setBusy] = useState(false);
@@ -67,7 +67,7 @@ export default function UploadAnatomyStep({
 
       const uploadedPose = await detectPose(img).catch(() => [] as PoseKeypoint[]);
       const fit = fitSimilarityTransform(uploadedPose, originalPose, uploadedSizeRef.current, frameSize);
-      setMatchInfo({ matchedPoints: fit.matchedPoints, rmsError: fit.rmsError });
+      setMatchInfo({ matchedPoints: fit.matchedPoints, candidatePoints: fit.candidatePoints, rmsError: fit.rmsError });
       setAutoTransform(fit.matchedPoints >= 3 ? fit.transform : centerFitTransform(uploadedSizeRef.current, frameSize));
       setAdjust(DEFAULT_ADJUST);
       setPhase("reviewing");
@@ -143,7 +143,7 @@ export default function UploadAnatomyStep({
           {matchInfo && (
             <p className="muted">
               {matchInfo.matchedPoints >= 3
-                ? `Auto-aligned using ${matchInfo.matchedPoints} matched joints (fit error ${matchInfo.rmsError.toFixed(0)}px). Fine-tune below if needed.`
+                ? `Auto-aligned using ${matchInfo.matchedPoints} of ${matchInfo.candidatePoints} detected joints (fit error ${matchInfo.rmsError.toFixed(1)}px — outlier joints were automatically excluded). The sliders below are optional fine-tuning, not required.`
                 : "Couldn't reliably detect a pose in your image — placed it centered. Use the sliders below to align it manually."}
             </p>
           )}

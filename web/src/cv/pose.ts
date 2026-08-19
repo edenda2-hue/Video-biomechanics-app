@@ -1,8 +1,11 @@
 import { FilesetResolver, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
 import type { BodyPart, PoseKeypoint } from "../types";
 
+// "full" (not "lite"): the alignment step's accuracy depends directly on
+// landmark precision, especially on stylized/anatomical images where a
+// weaker model is more likely to mislocate joints.
 const MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task";
 const WASM_BASE = "/mediapipe-wasm";
 
 // MediaPipe Pose's 33-point topology, mapped onto the spec's anatomical

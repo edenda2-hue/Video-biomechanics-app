@@ -82,6 +82,20 @@ assert(Math.hypot(viaFit.x - viaTrue.x, viaFit.y - viaTrue.y) < 1, "fitted trans
 const sparse = fitSimilarityTransform(srcPose.slice(0, 2), dstPose.slice(0, 2), srcSize, dstSize);
 assert(sparse.matchedPoints < 3 && sparse.transform.a === 1 && sparse.transform.tx === 0, "falls back to identity with <3 matches");
 
+// Corrupt a few dstPose points (simulating a pose detector misplacing a
+// couple of joints on a stylized anatomical image) far from where the true
+// transform would put them. RANSAC should reject those as outliers and
+// still recover a transform close to the ground truth from the rest.
+const corruptedDstPose = dstPose.map((k, i) =>
+  i < 4 ? { ...k, x: Math.random(), y: Math.random() } : k,
+);
+const robustFit = fitSimilarityTransform(srcPose, corruptedDstPose, srcSize, dstSize);
+console.log("robust fit (4/20 points corrupted):", { matchedPoints: robustFit.matchedPoints, candidatePoints: robustFit.candidatePoints, rmsError: robustFit.rmsError });
+assert(robustFit.candidatePoints === BODY_PARTS.length, "all points still counted as candidates despite corruption");
+assert(robustFit.matchedPoints <= BODY_PARTS.length - 4, "outlier-corrupted points are excluded from the inlier set");
+assert(Math.abs(robustFit.transform.a - ta) < 0.05, "RANSAC recovers scale*cos close to ground truth despite 4 bad points");
+assert(Math.abs(robustFit.transform.tx - trueTx) < 5, "RANSAC recovers tx close to ground truth despite 4 bad points");
+
 // Manual nudge composition: identity base + zero adjustment should stay identity.
 const composedNoop = composeManualAdjustment(fit.transform, { offsetX: 0, offsetY: 0, scale: 1, rotationDeg: 0 }, { x: 0, y: 0 });
 assert(

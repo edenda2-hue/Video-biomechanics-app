@@ -65,7 +65,19 @@ export default function FrameSelectStep({
           value={time}
           onChange={(e) => setTime(Number(e.target.value))}
         />
-        <span className="muted">{time.toFixed(2)}s / {metadata.durationSec.toFixed(2)}s</span>
+        <input
+          type="number"
+          min={0}
+          max={metadata.durationSec}
+          step={1 / metadata.fps}
+          value={time.toFixed(2)}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            if (Number.isFinite(v)) setTime(Math.min(metadata.durationSec, Math.max(0, v)));
+          }}
+          style={{ width: 90 }}
+        />
+        <span className="muted">seconds / {metadata.durationSec.toFixed(2)}s total</span>
       </div>
       <div className="row" style={{ marginTop: 16 }}>
         <button onClick={handleConfirm} disabled={busy}>
