@@ -18,7 +18,7 @@ videoRouter.post("/sessions", uploadVideo.single("video"), async (req, res, next
     await fs.rename(req.file.path, dest);
 
     const metadata = await probe(dest);
-    updateSession(session.id, { originalVideoPath: dest, metadata });
+    updateSession(session.id, { originalVideoPath: dest, metadata, trimEndSec: metadata.durationSec });
 
     res.json({ id: session.id, metadata });
   } catch (err) {

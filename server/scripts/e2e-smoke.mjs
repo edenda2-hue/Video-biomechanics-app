@@ -1,7 +1,9 @@
 // Manual smoke test for the backend pipeline's primary flow: upload video
 // -> confirm frame -> submit pose/mask (standing in for the client-side CV
 // Engine) -> upload a manually-created (pre-aligned) anatomy image -> set
-// timeline -> export, then verify the exported MP4 with ffprobe.
+// timeline -> exercise the AI edit chat (hold duration, anatomy nudge, trim,
+// and moving the freeze point, which re-extracts the frame server-side) ->
+// export, then verify the exported MP4 with ffprobe.
 // Run with: node scripts/e2e-smoke.mjs
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -69,7 +71,29 @@ async function main() {
     body: JSON.stringify({ freezeDurationSec: 2, transitionInSec: 0.4, transitionOutSec: 0.4 }),
   }).then(checkOk);
 
-  console.log("7. exporting final video (wipe transition)...");
+  console.log("6b. exercising the chat-edit endpoint (mock provider expected without OPENAI_API_KEY)...");
+  const chat1 = await postJson(`/sessions/${sessionId}/chat`, { message: "hold it 1 second longer" });
+  console.log("    reply:", chat1.reply, "| timeline:", chat1.timeline);
+  assert(chat1.provider === "mock", "mock chat provider should be selected without an API key");
+  assert(Math.abs(chat1.timeline.freezeDurationSec - 3) < 1e-6, "chat extended freezeDurationSec by 1s (2s -> 3s)");
+
+  const chat2 = await postJson(`/sessions/${sessionId}/chat`, { message: "move the anatomy right 10%" });
+  console.log("    reply:", chat2.reply, "| anatomyNudge:", chat2.anatomyNudge);
+  assert(chat2.anatomyNudge && Math.abs(chat2.anatomyNudge.offsetXPct - 0.1) < 1e-6, "chat returned a +10% rightward nudge");
+
+  const chat3 = await postJson(`/sessions/${sessionId}/chat`, { message: "trim the end to 2.5 seconds" });
+  console.log("    reply:", chat3.reply, "| timeline:", chat3.timeline);
+  assert(Math.abs(chat3.timeline.trimEndSec - 2.5) < 1e-6, "chat set trimEndSec to 2.5s");
+
+  const chat4 = await postJson(`/sessions/${sessionId}/chat`, { message: "move the freeze point to 1.2 seconds" });
+  console.log("    reply:", chat4.reply, "| frameChanged:", chat4.frameChanged, "| timeline:", chat4.timeline);
+  assert(chat4.frameChanged === true, "moving the freeze point re-extracts the frame server-side");
+  assert(Math.abs(chat4.timeline.freezeSec - 1.2) < 1e-6, "chat moved freezeSec to 1.2s");
+
+  console.log("6c. re-submitting pose/mask for the frame chat moved us to (stand-in for the browser CV Engine re-running)...");
+  await postJson(`/sessions/${sessionId}/pose`, { pose, maskPngBase64 });
+
+  console.log("7. exporting final video (wipe transition, trimmed to [0, 2.5]s)...");
   const exported = await postJson(`/sessions/${sessionId}/export`, {});
   console.log("   ", exported);
 
@@ -95,7 +119,8 @@ async function main() {
   console.log("    has audio track:", Boolean(a));
 
   assert(Number(v.width) === WIDTH && Number(v.height) === HEIGHT, "export resolution matches original");
-  const expectedDuration = DURATION + 2; // original + freeze duration
+  // trim [0, 2.5]s (via chat) + freezeDurationSec=3s (2s + 1s via chat)
+  const expectedDuration = 2.5 + 3;
   assert(Math.abs(Number(probe.format.duration) - expectedDuration) < 0.5, `export duration ~= ${expectedDuration}s`);
   assert(Boolean(a), "export retains an audio track");
 

@@ -96,25 +96,29 @@ export interface AssembleOptions {
   freezeSegmentPath: string;
   freezeSec: number;
   freezeDurationSec: number;
+  /** Only [trimStartSec, trimEndSec] of the original video is kept; freezeSec must fall inside this range. */
+  trimStartSec: number;
+  trimEndSec: number;
   metadata: VideoMetadata;
   outPath: string;
 }
 
 /**
- * Splices the generated freeze segment into the original video: everything
- * before and after `freezeSec` is the untouched original stream; only the
+ * Splices the generated freeze segment into the (optionally trimmed)
+ * original video: everything before and after `freezeSec`, within
+ * [trimStartSec, trimEndSec], is the untouched original stream; only the
  * spliced-in window is new footage. Audio is held silent for the freeze
  * duration so audio/video stay in sync when the clip resumes, then the
  * original audio continues exactly where it left off.
  */
 export async function assembleFinalVideo(opts: AssembleOptions) {
-  const { originalVideoPath, freezeSegmentPath, freezeSec, freezeDurationSec, metadata, outPath } = opts;
+  const { originalVideoPath, freezeSegmentPath, freezeSec, freezeDurationSec, trimStartSec, trimEndSec, metadata, outPath } = opts;
   const bitrate = estimateBitrate(metadata);
 
   const filters: string[] = [
-    `[0:v]trim=0:${freezeSec},setpts=PTS-STARTPTS[v0]`,
+    `[0:v]trim=${trimStartSec}:${freezeSec},setpts=PTS-STARTPTS[v0]`,
     `[1:v]setpts=PTS-STARTPTS[v1]`,
-    `[0:v]trim=${freezeSec}:${metadata.durationSec},setpts=PTS-STARTPTS[v2]`,
+    `[0:v]trim=${freezeSec}:${trimEndSec},setpts=PTS-STARTPTS[v2]`,
     `[v0][v1][v2]concat=n=3:v=1:a=0[vout]`,
   ];
 
@@ -122,9 +126,9 @@ export async function assembleFinalVideo(opts: AssembleOptions) {
 
   if (metadata.hasAudio) {
     filters.push(
-      `[0:a]atrim=0:${freezeSec},asetpts=PTS-STARTPTS[a0]`,
+      `[0:a]atrim=${trimStartSec}:${freezeSec},asetpts=PTS-STARTPTS[a0]`,
       `anullsrc=r=48000:cl=stereo:d=${freezeDurationSec}[asil]`,
-      `[0:a]atrim=${freezeSec}:${metadata.durationSec},asetpts=PTS-STARTPTS[a2]`,
+      `[0:a]atrim=${freezeSec}:${trimEndSec},asetpts=PTS-STARTPTS[a2]`,
       `[a0][asil][a2]concat=n=3:v=0:a=1[aout]`,
     );
   }

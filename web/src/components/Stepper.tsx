@@ -1,4 +1,4 @@
-const STEPS = ["Upload", "Select Frame", "Upload Anatomy", "Preview", "Export"];
+const STEPS = ["Upload", "Select Frame", "Edit", "Export"];
 
 export default function Stepper({ current }: { current: number }) {
   return (

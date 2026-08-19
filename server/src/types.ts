@@ -80,6 +80,9 @@ export interface Session {
   freezeDurationSec: number;
   transitionInSec: number;
   transitionOutSec: number;
+  /** Export trims the source video to [trimStartSec, trimEndSec] before splicing in the freeze. */
+  trimStartSec: number;
+  trimEndSec?: number;
   exerciseName?: string;
   originalFramePath?: string;
   maskPath?: string;

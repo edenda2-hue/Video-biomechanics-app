@@ -1,11 +1,10 @@
 import { useState } from "react";
+import EditStep from "./components/EditStep";
 import ExportStep from "./components/ExportStep";
 import FrameSelectStep from "./components/FrameSelectStep";
-import PreviewStep from "./components/PreviewStep";
 import Stepper from "./components/Stepper";
-import UploadAnatomyStep from "./components/UploadAnatomyStep";
 import UploadStep from "./components/UploadStep";
-import type { PoseKeypoint, VideoMetadata } from "./types";
+import type { VideoMetadata } from "./types";
 
 interface WizardState {
   step: number;
@@ -14,8 +13,6 @@ interface WizardState {
   metadata?: VideoMetadata;
   freezeSec?: number;
   frameUrl?: string;
-  pose?: PoseKeypoint[];
-  anatomyImageUrl?: string;
 }
 
 export default function App() {
@@ -47,28 +44,18 @@ export default function App() {
           />
         )}
 
-        {state.step === 2 && state.sessionId && state.frameUrl && (
-          <UploadAnatomyStep
-            key={state.frameUrl}
+        {state.step === 2 && state.sessionId && state.frameUrl && state.freezeSec !== undefined && state.metadata && (
+          <EditStep
+            key={state.sessionId}
             sessionId={state.sessionId}
-            frameUrl={state.frameUrl}
-            onApproved={(pose, anatomyImageUrl) => setState((s) => ({ ...s, step: 3, pose, anatomyImageUrl }))}
+            initialFrameUrl={state.frameUrl}
+            initialFreezeSec={state.freezeSec}
+            videoDurationSec={state.metadata.durationSec}
+            onContinue={() => setState((s) => ({ ...s, step: 3 }))}
           />
         )}
 
-        {state.step === 3 && state.sessionId && state.frameUrl && state.anatomyImageUrl && state.pose && (
-          <PreviewStep
-            sessionId={state.sessionId}
-            originalFrameUrl={state.frameUrl}
-            anatomyImageUrl={state.anatomyImageUrl}
-            maskUrl={`/api/sessions/${state.sessionId}/mask`}
-            pose={state.pose}
-            initial={{ freezeDurationSec: 5, transitionInSec: 0.6, transitionOutSec: 0.6 }}
-            onContinue={() => setState((s) => ({ ...s, step: 4 }))}
-          />
-        )}
-
-        {state.step === 4 && state.sessionId && <ExportStep sessionId={state.sessionId} />}
+        {state.step === 3 && state.sessionId && <ExportStep sessionId={state.sessionId} />}
       </main>
     </>
   );

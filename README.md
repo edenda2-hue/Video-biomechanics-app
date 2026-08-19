@@ -19,17 +19,24 @@ is everything around that image:
 
 1. **Upload** the source video (resolution/fps/aspect/audio/codec captured
    as the immutable "Master Canvas").
-2. **Select frame** — scrub the timeline, confirm; the exact frame is
-   extracted directly from the video (ffmpeg), never synthesized.
-3. **Upload anatomy image** — you provide the anatomical image for that
-   exact frame. The CV Engine (in-browser pose estimation) detects matching
-   joints in both the original frame and your uploaded image, then computes
-   and applies the precise scale/rotation/position transform to line yours
-   up exactly on top of the original — plus manual nudge sliders (move/
-   scale/rotate) if you want to fine-tune it.
-4. **Preview** — scrub/play a live canvas preview of the body-only "wipe"
-   transition (see below) and tune freeze duration/transition timing.
-5. **Export** — renders the final MP4, preserving original resolution/fps/
+2. **Select frame** — scrub the timeline (or type the exact second),
+   confirm; the exact frame is extracted directly from the video (ffmpeg),
+   never synthesized.
+3. **Edit** — one screen combining:
+   - **Anatomy upload + auto-alignment**: you provide the anatomical image
+     for that exact frame. The CV Engine (in-browser pose estimation)
+     detects matching joints in both images and fits the precise scale/
+     rotation/position transform to line yours up on the original —
+     robust to a few bad joint matches (see "outlier rejection" below).
+   - A **live canvas preview** of the body-only head-to-foot "wipe"
+     transition (see below).
+   - **Typeable controls** for the freeze point, hold duration, transition
+     in/out speed, and trim start/end (the exported clip's range).
+   - Optional **manual nudge sliders** (position/size/rotation) for the
+     anatomy alignment, and an **AI chat** that can drive all of the above
+     from natural-language requests ("hold it 2 seconds longer", "move the
+     anatomy right a bit", "trim the end to 8 seconds") — see below.
+4. **Export** — renders the final MP4, preserving original resolution/fps/
    aspect ratio/audio.
 
 An OpenAI-generation path also exists in the codebase (see "Alternate:
@@ -48,9 +55,10 @@ server/  Node + TypeScript API: session/workflow state and the "Video
 | Responsibility | Where |
 |---|---|
 | Pose estimation, human segmentation, pose-based image alignment | `web/src/cv/*` (`pose.ts`, `segmentation.ts`, `alignment.ts`) |
-| Alignment review UI (auto-fit + manual nudge, before/after slider) | `web/src/components/UploadAnatomyStep.tsx` |
+| Edit screen (upload+align, live preview, timing/trim controls, chat UI) | `web/src/components/EditStep.tsx` |
+| AI edit chat (interprets requests into parameter changes; offline regex mock or real OpenAI) | `server/src/lib/openai/chatEdit.ts`, `server/src/routes/chat.ts` |
 | Workflow/session state | `server/src/routes/*` |
-| Frame extraction, freeze, body-only wipe transition, compositing, audio, resume, export | `server/src/lib/ffmpeg.ts`, `server/src/lib/compositing.ts` |
+| Frame extraction, freeze, body-only wipe transition, compositing, audio, resume, export/trim | `server/src/lib/ffmpeg.ts`, `server/src/lib/compositing.ts` |
 
 ### The core mechanic: body-only transition
 
@@ -63,8 +71,12 @@ literally, not just as a prompt instruction:
 2. The CV Engine produces a person/background segmentation mask for that
    frame, and aligns your uploaded anatomy image onto it (`web/src/cv/alignment.ts`
    fits a least-squares similarity transform — scale + rotation + translation
-   — from matched pose keypoints in both images; unit-tested in
-   `web/scripts/test-alignment.ts`).
+   — from matched pose keypoints in both images). A single bad joint match
+   (common on stylized anatomical images) can badly skew a plain least-
+   squares fit, so the fit runs RANSAC first: every pair of candidate points
+   proposes a transform, the one with the most inliers wins, and the final
+   transform is refit over just that inlier set — unit-tested in
+   `web/scripts/test-alignment.ts`, including a case with corrupted points.
 3. For every frame of the transition, `lib/compositing.ts` computes, per
    pixel, `result = original*(1 - mask*alpha) + anatomy*(mask*alpha)`.
    Outside the mask, `alpha` never affects the output — background pixels
@@ -78,9 +90,35 @@ literally, not just as a prompt instruction:
    original audio held silent for the freeze duration so audio/video stay in
    sync when the clip resumes.
 
-The Preview step (`web/src/components/PreviewStep.tsx`) renders the exact
-same wipe blend live in a `<canvas>` (via gradient-based alpha compositing)
-so you can scrub/tune timing before rendering the final MP4.
+The Edit screen renders the exact same wipe blend live in a `<canvas>` (via
+gradient-based alpha compositing) so you can scrub/tune timing before
+rendering the final MP4. Trim (`trimStartSec`/`trimEndSec`, applied at
+export time) lets the exported clip cover only part of the source video;
+`freezeSec` must fall within the trimmed range.
+
+## The AI edit chat
+
+Rather than only exposing raw parameter fields, the Edit screen has a chat
+box: describe what you want in plain language (Hebrew or English) and it's
+translated into a structured parameter patch. It can adjust exactly five
+things, nothing else — hold duration, transition in/out speed, trim start/
+end, the freeze point itself, and the anatomy image's position/size/
+rotation (as a relative nudge on top of the current alignment):
+
+- Timing/trim changes are applied server-side immediately
+  (`server/src/routes/chat.ts`).
+- An anatomy nudge is returned as a delta for the client to apply to its
+  local alignment state, then the image is re-warped and re-uploaded.
+- Moving the freeze point re-extracts the frame server-side and tells the
+  client to re-run pose detection + re-alignment against it (the same code
+  path as the initial upload).
+
+This calls OpenAI's chat completions (`OPENAI_TEXT_MODEL`, plain text — not
+image generation, so a few cents at most per message) when `OPENAI_API_KEY`
+is set; without a key it falls back to a small regex-based mock
+(`MockChatEditProvider`) that handles common English phrasings for
+testing/demo purposes, with much narrower language understanding than the
+real model.
 
 ## Alternate: AI-generated anatomy (not in the primary flow)
 
@@ -112,7 +150,7 @@ npm run dev     # starts the API (8787) and the web app (5173) together
 
 `npm run setup` fails fast with a clear message (and OS-specific install
 command) if Node or ffmpeg is missing. Open **http://localhost:5173** and
-walk through the 5-step wizard.
+walk through the 4-step wizard.
 
 To run the two halves separately instead: `npm run dev:server` and
 `npm run dev:web` in two terminals.
@@ -130,9 +168,11 @@ required; free instances sleep after 15 min idle and cold-start in
    repo, branch `claude/biomechanics-video-analysis-qa3xmg`.
 3. Render reads `render.yaml` automatically and proposes one free web
    service. Confirm.
-4. (Optional) In the service's Environment tab, add `OPENAI_API_KEY` — only
-   needed if you re-enable the alternate AI-generation path; the primary
-   manual-upload flow doesn't call OpenAI at all.
+4. (Optional) In the service's Environment tab, add `OPENAI_API_KEY` to
+   enable full natural-language understanding in the Edit screen's AI chat
+   (cheap text-only calls) — without it, the chat falls back to a limited
+   regex-based mock. The manual anatomy upload/alignment itself never calls
+   OpenAI either way.
 5. Wait for the build to finish, then open the `https://<name>.onrender.com`
    URL it gives you.
 
@@ -151,10 +191,12 @@ network access to the model CDN.
 ### Automated checks
 
 - `web/scripts/test-alignment.ts` unit-tests the pose-based alignment math
-  (`fitSimilarityTransform`/`composeManualAdjustment`) against a known
-  synthetic transform. Run with: `cd web && npx tsx scripts/test-alignment.ts`.
-- `server/scripts/e2e-smoke.mjs` drives the entire backend pipeline
-  (upload → confirm frame → submit pose/mask → upload an anatomy image →
+  (`fitSimilarityTransform`/`composeManualAdjustment`), including RANSAC
+  outlier rejection, against known synthetic transforms. Run with:
+  `cd web && npx tsx scripts/test-alignment.ts`.
+- `server/scripts/e2e-smoke.mjs` drives the entire backend pipeline (upload
+  → confirm frame → submit pose/mask → upload an anatomy image → exercise
+  the chat endpoint for hold-duration/nudge/trim/freeze-point changes →
   export) against a synthetic ffmpeg-generated test video, then verifies
   the exported MP4's resolution/fps/duration/audio with `ffprobe`. Run with
   the server up: `node server/scripts/e2e-smoke.mjs`.
@@ -164,10 +206,16 @@ network access to the model CDN.
 
 - **Alignment quality depends on pose detection succeeding on your uploaded
   image.** An abstract/stylized anatomical figure may detect fewer joints
-  than a photo; the app falls back to a centered scale-to-fit placement and
-  the manual nudge sliders when fewer than 3 joints match.
+  than a photo; the app falls back to a centered scale-to-fit placement when
+  fewer than 3 joints match. The nudge sliders/chat are always available for
+  fine-tuning either way.
+- **The offline chat mock has narrow language understanding** (English
+  regex patterns only) — it's there so the mechanism is testable without an
+  API key, not as a substitute for the real model. Add `OPENAI_API_KEY` for
+  full Hebrew/English natural-language control.
 - Video engine assumes a single freeze point per export (one
-  freeze/anatomy/resume cycle per render).
+  freeze/anatomy/resume cycle per render); trim only controls which part of
+  the source video surrounds that one freeze.
 - Section 10's advanced biomechanics (joint angles, force vectors, moment
   arms, COM, GRF) is out of scope and isn't implemented.
 - The dormant AI-generation path's regeneration budget

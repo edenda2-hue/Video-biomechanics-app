@@ -11,6 +11,7 @@ import { anatomyRouter } from "./routes/anatomy.js";
 import { musclesRouter } from "./routes/muscles.js";
 import { highlightRouter } from "./routes/highlight.js";
 import { exportRouter } from "./routes/exportRouter.js";
+import { chatRouter } from "./routes/chat.js";
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
@@ -26,6 +27,7 @@ app.use("/api", anatomyRouter);
 app.use("/api", musclesRouter);
 app.use("/api", highlightRouter);
 app.use("/api", exportRouter);
+app.use("/api", chatRouter);
 
 // Single-service deployment (see Dockerfile / render.yaml): if a built web
 // app is present, serve it from the same process/port as the API so the

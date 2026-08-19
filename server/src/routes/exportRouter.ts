@@ -11,19 +11,32 @@ export const exportRouter = Router();
 exportRouter.put("/sessions/:id/timeline", (req, res, next) => {
   try {
     const session = requireSession(req.params.id);
-    const { freezeDurationSec, transitionInSec, transitionOutSec } = req.body ?? {};
+    const { freezeDurationSec, transitionInSec, transitionOutSec, trimStartSec, trimEndSec } = req.body ?? {};
     const patch: Record<string, number> = {};
     if (freezeDurationSec !== undefined) patch.freezeDurationSec = Number(freezeDurationSec);
     if (transitionInSec !== undefined) patch.transitionInSec = Number(transitionInSec);
     if (transitionOutSec !== undefined) patch.transitionOutSec = Number(transitionOutSec);
+    if (trimStartSec !== undefined) patch.trimStartSec = Number(trimStartSec);
+    if (trimEndSec !== undefined) patch.trimEndSec = Number(trimEndSec);
 
     const inSec = patch.transitionInSec ?? session.transitionInSec;
     const outSec = patch.transitionOutSec ?? session.transitionOutSec;
     const dur = patch.freezeDurationSec ?? session.freezeDurationSec;
     if (inSec + outSec >= dur) throw new HttpError(400, "transitionInSec + transitionOutSec must be less than freezeDurationSec");
 
+    const trimStart = patch.trimStartSec ?? session.trimStartSec;
+    const trimEnd = patch.trimEndSec ?? session.trimEndSec ?? session.metadata?.durationSec;
+    if (trimEnd !== undefined) {
+      if (trimStart < 0 || trimEnd > (session.metadata?.durationSec ?? trimEnd) || trimStart >= trimEnd) {
+        throw new HttpError(400, "trimStartSec/trimEndSec must be within the video and trimStartSec < trimEndSec");
+      }
+      if (session.freezeSec !== undefined && (session.freezeSec < trimStart || session.freezeSec > trimEnd)) {
+        throw new HttpError(400, "The freeze point must fall within the trimmed range");
+      }
+    }
+
     updateSession(session.id, patch);
-    res.json({ freezeDurationSec: dur, transitionInSec: inSec, transitionOutSec: outSec });
+    res.json({ freezeDurationSec: dur, transitionInSec: inSec, transitionOutSec: outSec, trimStartSec: trimStart, trimEndSec: trimEnd });
   } catch (err) {
     next(err);
   }
@@ -45,10 +58,12 @@ exportRouter.post("/sessions/:id/export", async (req, res, next) => {
       freezeDurationSec,
       transitionInSec,
       transitionOutSec,
+      trimStartSec,
       pose,
     } = session;
+    const trimEndSec = session.trimEndSec ?? metadata?.durationSec;
 
-    if (!originalFramePath || !maskPath || !anatomyImagePath || !metadata || freezeSec === undefined) {
+    if (!originalFramePath || !maskPath || !anatomyImagePath || !metadata || freezeSec === undefined || trimEndSec === undefined) {
       throw new HttpError(400, "Upload and approve the anatomy image before exporting");
     }
     if (!session.anatomyApproved) throw new HttpError(400, "Anatomy image must be approved before exporting");
@@ -79,6 +94,8 @@ exportRouter.post("/sessions/:id/export", async (req, res, next) => {
       freezeSegmentPath,
       freezeSec,
       freezeDurationSec,
+      trimStartSec,
+      trimEndSec,
       metadata,
       outPath,
     });
@@ -87,7 +104,7 @@ exportRouter.post("/sessions/:id/export", async (req, res, next) => {
     res.json({
       downloadUrl: `/api/sessions/${session.id}/export/file`,
       frameSize: { width, height },
-      durationSec: metadata.durationSec + freezeDurationSec,
+      durationSec: trimEndSec - trimStartSec + freezeDurationSec,
     });
   } catch (err) {
     next(err);

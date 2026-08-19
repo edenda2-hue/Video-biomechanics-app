@@ -17,6 +17,7 @@ export async function createSession(originalVideoPath: string): Promise<Session>
     freezeDurationSec: 5,
     transitionInSec: 0.6,
     transitionOutSec: 0.6,
+    trimStartSec: 0,
     anatomyApproved: false,
     muscles: [],
     labels: [],

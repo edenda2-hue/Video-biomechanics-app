@@ -113,11 +113,16 @@ export async function generateHighlight(id: string): Promise<{ imageUrl: string;
   return handle(await fetch(`${BASE}/sessions/${id}/highlight`, { method: "POST" }));
 }
 
-export async function setTimeline(
-  id: string,
-  patch: { freezeDurationSec?: number; transitionInSec?: number; transitionOutSec?: number },
-): Promise<void> {
-  await handle(
+export interface TimelineState {
+  freezeDurationSec: number;
+  transitionInSec: number;
+  transitionOutSec: number;
+  trimStartSec: number;
+  trimEndSec: number;
+}
+
+export async function setTimeline(id: string, patch: Partial<TimelineState>): Promise<TimelineState> {
+  return handle(
     await fetch(`${BASE}/sessions/${id}/timeline`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -128,4 +133,31 @@ export async function setTimeline(
 
 export async function exportVideo(id: string): Promise<{ downloadUrl: string; durationSec: number }> {
   return handle(await fetch(`${BASE}/sessions/${id}/export`, { method: "POST" }));
+}
+
+export interface AnatomyNudgeDelta {
+  offsetXPct?: number;
+  offsetYPct?: number;
+  scaleDelta?: number;
+  rotationDeltaDeg?: number;
+}
+
+export interface ChatEditResponse {
+  reply: string;
+  provider: string;
+  anatomyNudge: AnatomyNudgeDelta | null;
+  frameChanged: boolean;
+  frameUrl?: string;
+  timeline: { freezeSec: number } & TimelineState;
+}
+
+/** Sends a natural-language edit request to the AI chat; the server applies timing/trim changes directly. */
+export async function sendChatEdit(id: string, message: string): Promise<ChatEditResponse> {
+  return handle(
+    await fetch(`${BASE}/sessions/${id}/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message }),
+    }),
+  );
 }
