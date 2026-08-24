@@ -179,19 +179,26 @@ frame, to track the person's pose through the whole clip:
    latency don't scale with clip length the way per-frame AI calls would.
 3. Compositing reuses the existing body-only principle
    (`result = original*(1-mask*alpha) + puppet*(mask*alpha)`), except the
-   mask now needs to track the person per frame too (segmentation in VIDEO
-   mode, same idea as step 1) instead of using one static mask.
+   mask now needs to track the person per frame too instead of using one
+   static mask: `web/src/cv/videoMaskTrack.ts` runs the same MediaPipe
+   segmentation model already used for the single freeze frame, but in its
+   VIDEO running mode across the whole range, resizing every frame's mask
+   straight to the export resolution (`web/src/cv/maskBuffer.ts`'s bilinear
+   `resizeMaskBuffer`) so compositing can consume it directly.
 
-**Status**: steps 1–2's math is implemented and unit-tested
-(`web/scripts/test-limbwarp.ts`, run via `npx tsx scripts/test-limbwarp.ts`)
-— bone-transform recovery, capsule geometry, and per-segment resolution/
-graceful-dropout behavior (a low-confidence joint drops just that limb, not
-the whole pose) are all verified against synthetic poses. **Not yet built**:
-per-frame mask tracking, the frame-by-frame compositing/export pipeline for
-a continuous range (today's `lib/compositing.ts`/`lib/ffmpeg.ts` only know
-how to render one freeze segment), and a UI step to preview/approve it. A
-real test against actual reference footage (rather than only synthetic
-poses) is also still pending.
+**Status**: steps 1–3's CV-side math is implemented and unit-tested —
+`web/scripts/test-limbwarp.ts` covers bone-transform recovery, capsule
+geometry, and per-segment graceful dropout (a low-confidence joint drops
+just that limb, not the whole pose); `web/scripts/test-maskbuffer.ts` covers
+the mask resize math (identity, constant-buffer stability, monotonic
+gradient interpolation, no overshoot). Both `videoPoseTrack.ts` and
+`videoMaskTrack.ts` also carry a `VITE_CV_MOCK=1` fallback, mirroring the
+existing single-frame CV mocks, with matching synthetic motion so a mocked
+run has pose and mask agreeing with each other. **Not yet built**: the
+frame-by-frame compositing/export pipeline for a continuous range (today's
+`lib/compositing.ts`/`lib/ffmpeg.ts` only know how to render one freeze
+segment) and a UI step to preview/approve it. A real test against actual
+reference footage (rather than only synthetic poses) is also still pending.
 
 ## Alternate: AI-generated anatomy (not in the primary flow)
 
@@ -271,6 +278,9 @@ network access to the model CDN.
   for continuous mode (`boneTransform`/`capsulePolygon`/
   `computeSegmentTransforms`) against synthetic poses. Run with:
   `cd web && npx tsx scripts/test-limbwarp.ts`.
+- `web/scripts/test-maskbuffer.ts` unit-tests continuous mode's per-frame
+  mask resize math (`resizeMaskBuffer`). Run with:
+  `cd web && npx tsx scripts/test-maskbuffer.ts`.
 - `server/scripts/e2e-smoke.mjs` drives the entire backend pipeline (upload
   → confirm frame → submit pose/mask → upload an anatomy image → exercise
   the chat endpoint for hold-duration/nudge/trim/freeze-point changes →
