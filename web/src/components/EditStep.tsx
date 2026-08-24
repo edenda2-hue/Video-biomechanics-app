@@ -1,24 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { confirmFrame, sendChatEdit, setTimeline, submitPose, uploadAnatomyImage, type TimelineState } from "../api/client";
-import {
-  composeManualAdjustment,
-  fitSimilarityTransform,
-  verticalBounds,
-  warpImageToCanvas,
-  type AffineTransform,
-  IDENTITY_TRANSFORM,
-} from "../cv/alignment";
-import { BONE_SEGMENTS, computeSegmentTransforms, renderSkeletalPuppetFrameFromPoses } from "../cv/limbWarp";
+import { verticalBounds } from "../cv/alignment";
+import { fitAnatomyToPose, type AnatomyFitInfo } from "../cv/anatomyFit";
 import { detectPose } from "../cv/pose";
 import { segmentPerson } from "../cv/segmentation";
 import type { PoseKeypoint } from "../types";
 
 type Phase = "preparing-frame" | "need-anatomy" | "aligning" | "ready" | "error";
 type ChatMsg = { role: "user" | "assistant"; text: string };
-type MatchInfo =
-  | { mode: "puppet"; matched: number; total: number }
-  | { mode: "rigid"; matched: number; total: number }
-  | { mode: "center" };
+type MatchInfo = AnatomyFitInfo;
 
 const DEFAULT_ADJUST = { offsetX: 0, offsetY: 0, scale: 1, rotationDeg: 0 };
 
@@ -149,32 +139,10 @@ export default function EditStep({
     const rawSize = rawAnatomySizeRef.current;
     const targetPose = originalPoseRef.current;
     if (!img || !rawSize || !targetPose) return;
-    const uploadedPose = uploadedPoseRef.current;
 
-    let baseCanvas: HTMLCanvasElement | HTMLImageElement = img;
-    if (uploadedPose.length > 0) {
-      const segments = computeSegmentTransforms(uploadedPose, targetPose, rawSize, size);
-      if (segments.size === BONE_SEGMENTS.length) {
-        baseCanvas = renderSkeletalPuppetFrameFromPoses(img, uploadedPose, targetPose, rawSize, size);
-        setMatchInfo({ mode: "puppet", matched: segments.size, total: BONE_SEGMENTS.length });
-      } else {
-        const fit = fitSimilarityTransform(uploadedPose, targetPose, rawSize, size);
-        const t = fit.matchedPoints >= 3 ? fit.transform : centerFitTransform(rawSize, size);
-        baseCanvas = warpImageToCanvas(img, t, size.width, size.height);
-        setMatchInfo(
-          fit.matchedPoints >= 3
-            ? { mode: "rigid", matched: fit.matchedPoints, total: fit.candidatePoints }
-            : { mode: "center" },
-        );
-      }
-    } else {
-      baseCanvas = warpImageToCanvas(img, centerFitTransform(rawSize, size), size.width, size.height);
-      setMatchInfo({ mode: "center" });
-    }
+    const { canvas, info } = fitAnatomyToPose(img, uploadedPoseRef.current, rawSize, targetPose, size, manualAdjust);
+    setMatchInfo(info);
 
-    const pivot = { x: size.width / 2, y: size.height / 2 };
-    const nudgeTransform = composeManualAdjustment(IDENTITY_TRANSFORM, manualAdjust, pivot);
-    const canvas = warpImageToCanvas(baseCanvas, nudgeTransform, size.width, size.height);
     const dataUrl = canvas.toDataURL("image/png");
     const { imageUrl } = await uploadAnatomyImage(sessionId, dataUrl);
     setAnatomyImageUrl(imageUrl);
@@ -660,18 +628,6 @@ export default function EditStep({
       {error && <div className="error-box">{error}</div>}
     </div>
   );
-}
-
-function centerFitTransform(src: { width: number; height: number }, dst: { width: number; height: number }): AffineTransform {
-  const scale = Math.min(dst.width / src.width, dst.height / src.height);
-  return {
-    a: scale,
-    b: 0,
-    c: 0,
-    d: scale,
-    tx: (dst.width - src.width * scale) / 2,
-    ty: (dst.height - src.height * scale) / 2,
-  };
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
