@@ -10,6 +10,7 @@ import {
   type ExportJobStatus,
 } from "../api/client";
 import { fitAnatomyToPose, type AnatomyFitInfo } from "../cv/anatomyFit";
+import { useJobPolling } from "../hooks/useJobPolling";
 import { detectPose } from "../cv/pose";
 import { segmentPerson } from "../cv/segmentation";
 import type { PoseKeypoint, VideoMetadata } from "../types";
@@ -61,10 +62,8 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
   const [pickTime, setPickTime] = useState(Math.min(1, metadata.durationSec / 2));
   const [keyframes, setKeyframes] = useState<KeyframeEntry[]>([]);
   const [addingKeyframe, setAddingKeyframe] = useState(false);
-  const [status, setStatus] = useState<ExportJobStatus | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { status, setStatus, error, setError, start: startPolling, stop: stopPolling } = useJobPolling(getKeyframesExportStatus);
 
   useEffect(() => {
     const url = URL.createObjectURL(file);
@@ -76,9 +75,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
     if (videoRef.current) videoRef.current.currentTime = pickTime;
   }, [pickTime]);
 
-  useEffect(() => () => {
-    if (pollRef.current) clearInterval(pollRef.current);
-  }, []);
+  useEffect(() => stopPolling, [stopPolling]);
 
   async function handleAddKeyframe() {
     setAddingKeyframe(true);
@@ -165,18 +162,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
     try {
       await startKeyframesExport(sessionId);
       setStatus({ phase: "compositing", percent: 0, message: PHASE_LABEL.compositing });
-      pollRef.current = setInterval(async () => {
-        try {
-          const s = await getKeyframesExportStatus(sessionId);
-          setStatus(s);
-          if (s.phase === "done" || s.phase === "error") {
-            if (pollRef.current) clearInterval(pollRef.current);
-          }
-        } catch (e) {
-          if (pollRef.current) clearInterval(pollRef.current);
-          setError(e instanceof Error ? e.message : String(e));
-        }
-      }, 800);
+      startPolling(sessionId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

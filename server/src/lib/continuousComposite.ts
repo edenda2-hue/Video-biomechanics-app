@@ -61,7 +61,7 @@ export async function buildContinuousSequence(
       .toBuffer();
     const maskBuf = await sharp(toBuffer(f.maskPngBase64)).resize(width, height).greyscale().raw().toBuffer();
 
-    const blended = blendFrame(originalBuf, puppetBuf, maskBuf, 1, width, height);
+    const blended = await blendFrame(originalBuf, puppetBuf, maskBuf, 1, width, height);
     const outPath = path.join(outDir, `frame_${String(index).padStart(5, "0")}.png`);
     await sharp(blended, { raw: { width, height, channels: 4 } }).png().toFile(outPath);
     await fs.unlink(origPath);

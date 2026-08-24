@@ -8,6 +8,20 @@ function smoothstep(t: number): number {
   return c * c * (3 - 2 * c);
 }
 
+/**
+ * Yields to the Node event loop. The per-pixel blend loops below are pure
+ * synchronous JS with no natural `await` point, so on a real (not tiny
+ * test-fixture) frame resolution a single blend call can block the event
+ * loop for long enough that other in-flight requests — notably the
+ * export-status poll the UI depends on — get starved and the platform's
+ * proxy (e.g. Render's) can return a 502 for them even though the job
+ * itself is still running fine server-side. Yielding periodically keeps
+ * the server responsive to those requests throughout compositing.
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 /** Normalized [top, bottom] vertical extent of the person, for the wipe transition's sweep geometry. */
 export function verticalBoundsFromPose(pose: PoseKeypoint[]): { top: number; bottom: number } {
   const ys = pose.filter((k) => k.confidence >= 0.3).map((k) => k.y);
@@ -121,8 +135,8 @@ export async function buildFreezeSequence(
     } else {
       const frame =
         spec.phase !== "hold" && style === "wipe"
-          ? blendFrameWipe(originalBuf, anatomyBuf, maskBuf, width, height, bounds, spec.phase, spec.t)
-          : blendFrame(
+          ? await blendFrameWipe(originalBuf, anatomyBuf, maskBuf, width, height, bounds, spec.phase, spec.t)
+          : await blendFrame(
               originalBuf,
               anatomyBuf,
               maskBuf,
@@ -150,7 +164,7 @@ export async function buildFreezeSequence(
  * half a feather band on each side so it reaches full coverage/clearance
  * exactly at t=1, matching the flat alpha=1 hold phase with no visible pop.
  */
-function blendFrameWipe(
+async function blendFrameWipe(
   originalBuf: Buffer,
   anatomyBuf: Buffer,
   maskBuf: Buffer,
@@ -159,12 +173,13 @@ function blendFrameWipe(
   bounds: { top: number; bottom: number },
   phase: "in" | "out",
   t: number,
-): Buffer {
+): Promise<Buffer> {
   const span = Math.max(1e-3, bounds.bottom - bounds.top);
   const feather = span * 0.12;
   const threshold = bounds.top - feather / 2 + t * (span + feather);
 
   const out = Buffer.alloc(width * height * 4);
+  const ROWS_PER_CHUNK = 64;
   for (let y = 0; y < height; y++) {
     const ny = y / height;
     const local = (threshold - ny) / feather + 0.5;
@@ -180,27 +195,31 @@ function blendFrameWipe(
       }
       out[o + 3] = 255;
     }
+    if (y % ROWS_PER_CHUNK === ROWS_PER_CHUNK - 1) await yieldToEventLoop();
   }
   return out;
 }
 
 /** result = original * (1 - mask*alpha) + anatomy * (mask*alpha), computed per-pixel in raw RGBA space. */
-export function blendFrame(
+export async function blendFrame(
   originalBuf: Buffer,
   anatomyBuf: Buffer,
   maskBuf: Buffer,
   alpha: number,
   width: number,
   height: number,
-): Buffer {
+): Promise<Buffer> {
   const out = Buffer.alloc(width * height * 4);
-  for (let p = 0; p < width * height; p++) {
+  const PIXELS_PER_CHUNK = 200_000;
+  const total = width * height;
+  for (let p = 0; p < total; p++) {
     const m = (maskBuf[p] / 255) * alpha;
     const o = p * 4;
     for (let c = 0; c < 3; c++) {
       out[o + c] = Math.round(originalBuf[o + c] * (1 - m) + anatomyBuf[o + c] * m);
     }
     out[o + 3] = 255;
+    if (p % PIXELS_PER_CHUNK === PIXELS_PER_CHUNK - 1) await yieldToEventLoop();
   }
   return out;
 }

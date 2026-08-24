@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getContinuousExportStatus, setContinuousRange, startContinuousExport, type ExportJobStatus } from "../api/client";
 import { detectPose } from "../cv/pose";
 import { buildContinuousFrames, type AnatomyReference, type ContinuousProgress } from "../cv/continuousPipeline";
+import { useJobPolling } from "../hooks/useJobPolling";
 import type { PoseKeypoint, VideoMetadata } from "../types";
 
 const PHASE_LABEL: Record<ExportJobStatus["phase"], string> = {
@@ -54,10 +55,8 @@ export default function ContinuousStep({ sessionId, file, metadata }: { sessionI
   const [startSec, setStartSec] = useState(0);
   const [endSec, setEndSec] = useState(Math.min(MAX_RANGE_SEC, metadata.durationSec));
   const [prep, setPrep] = useState<ContinuousProgress | null>(null);
-  const [status, setStatus] = useState<ExportJobStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { status, setStatus, error, setError, start: startPolling, stop: stopPolling } = useJobPolling(getContinuousExportStatus);
 
   useEffect(() => {
     const url = URL.createObjectURL(file);
@@ -67,7 +66,7 @@ export default function ContinuousStep({ sessionId, file, metadata }: { sessionI
 
   useEffect(
     () => () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      stopPolling();
       gallery.forEach((g) => URL.revokeObjectURL(g.objectUrl));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -151,18 +150,7 @@ export default function ContinuousStep({ sessionId, file, metadata }: { sessionI
       await startContinuousExport(sessionId, frames);
 
       setStatus({ phase: "compositing", percent: 0, message: PHASE_LABEL.compositing });
-      pollRef.current = setInterval(async () => {
-        try {
-          const s = await getContinuousExportStatus(sessionId);
-          setStatus(s);
-          if (s.phase === "done" || s.phase === "error") {
-            if (pollRef.current) clearInterval(pollRef.current);
-          }
-        } catch (e) {
-          if (pollRef.current) clearInterval(pollRef.current);
-          setError(e instanceof Error ? e.message : String(e));
-        }
-      }, 800);
+      startPolling(sessionId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

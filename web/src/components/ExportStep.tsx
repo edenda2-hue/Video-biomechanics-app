@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { getExportStatus, startExport, type ExportJobStatus } from "../api/client";
+import { useJobPolling } from "../hooks/useJobPolling";
 
 const PHASE_LABEL: Record<ExportJobStatus["phase"], string> = {
   compositing: "Compositing the anatomy transition frames",
@@ -10,14 +11,10 @@ const PHASE_LABEL: Record<ExportJobStatus["phase"], string> = {
 };
 
 export default function ExportStep({ sessionId }: { sessionId: string }) {
-  const [status, setStatus] = useState<ExportJobStatus | null>(null);
+  const { status, setStatus, error, setError, start, stop } = useJobPolling(getExportStatus);
   const [starting, setStarting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => () => {
-    if (pollRef.current) clearInterval(pollRef.current);
-  }, []);
+  useEffect(() => stop, [stop]);
 
   async function handleExport() {
     setStarting(true);
@@ -26,18 +23,7 @@ export default function ExportStep({ sessionId }: { sessionId: string }) {
     try {
       await startExport(sessionId);
       setStatus({ phase: "compositing", percent: 0, message: PHASE_LABEL.compositing });
-      pollRef.current = setInterval(async () => {
-        try {
-          const s = await getExportStatus(sessionId);
-          setStatus(s);
-          if (s.phase === "done" || s.phase === "error") {
-            if (pollRef.current) clearInterval(pollRef.current);
-          }
-        } catch (e) {
-          if (pollRef.current) clearInterval(pollRef.current);
-          setError(e instanceof Error ? e.message : String(e));
-        }
-      }, 800);
+      start(sessionId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
