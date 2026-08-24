@@ -193,6 +193,71 @@ export async function assembleFinalVideo(opts: AssembleOptions, onProgress?: (fr
   }
 }
 
+export interface AssembleContinuousOptions {
+  originalVideoPath: string;
+  /** Encoded video covering exactly [startSec, endSec] of output content (from buildContinuousSequence + encodeImageSequence). */
+  continuousSegmentPath: string;
+  startSec: number;
+  endSec: number;
+  trimStartSec: number;
+  trimEndSec: number;
+  metadata: VideoMetadata;
+  outPath: string;
+}
+
+/**
+ * Splices a continuous-mode segment into the (optionally trimmed) original
+ * video: everything before `startSec` and after `endSec`, within
+ * [trimStartSec, trimEndSec], is the untouched original stream; only
+ * [startSec, endSec] is replaced with the puppet-composited footage. Unlike
+ * the single-freeze flow, the replaced range keeps the *original* audio
+ * unmodified throughout (no silence to splice in) since nothing here changes
+ * playback timing — the puppet sequence covers the same duration and frame
+ * rate as the video content it replaces.
+ */
+export async function assembleContinuousVideo(opts: AssembleContinuousOptions, onProgress?: (fraction: number) => void) {
+  const { originalVideoPath, continuousSegmentPath, startSec, endSec, trimStartSec, trimEndSec, metadata, outPath } = opts;
+  const bitrate = estimateBitrate(metadata);
+
+  const filters: string[] = [
+    `[0:v]trim=${trimStartSec}:${startSec},setpts=PTS-STARTPTS[v0]`,
+    `[1:v]setpts=PTS-STARTPTS[v1]`,
+    `[0:v]trim=${endSec}:${trimEndSec},setpts=PTS-STARTPTS[v2]`,
+    `[v0][v1][v2]concat=n=3:v=1:a=0[vout]`,
+  ];
+
+  const args = ["-i", originalVideoPath, "-i", continuousSegmentPath];
+
+  if (metadata.hasAudio) {
+    filters.push(`[0:a]atrim=${trimStartSec}:${trimEndSec},asetpts=PTS-STARTPTS[aout]`);
+  }
+
+  args.push(
+    "-filter_complex",
+    filters.join(";"),
+    "-map",
+    "[vout]",
+    ...(metadata.hasAudio ? ["-map", "[aout]"] : ["-an"]),
+    "-r",
+    String(metadata.fps),
+    "-c:v",
+    "libx264",
+    "-b:v",
+    bitrate,
+    "-pix_fmt",
+    "yuv420p",
+    ...(metadata.hasAudio ? ["-c:a", "aac", "-b:a", "192k"] : []),
+    outPath,
+  );
+
+  const expectedFrames = Math.round((trimEndSec - trimStartSec) * metadata.fps);
+  if (onProgress) {
+    await ffmpegWithProgress(args, expectedFrames, onProgress);
+  } else {
+    await ffmpeg(args);
+  }
+}
+
 function estimateBitrate(metadata: VideoMetadata): string {
   // Keep it comfortably above typical source bitrates ("High Bitrate", spec section 15).
   const pixelsPerSec = metadata.width * metadata.height * metadata.fps;

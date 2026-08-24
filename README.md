@@ -186,7 +186,21 @@ frame, to track the person's pose through the whole clip:
    straight to the export resolution (`web/src/cv/maskBuffer.ts`'s bilinear
    `resizeMaskBuffer`) so compositing can consume it directly.
 
-**Status**: steps 1–3's CV-side math is implemented and unit-tested —
+4. **Server-side compositing/export** (`server/src/lib/continuousComposite.ts`,
+   plus `assembleContinuousVideo` in `lib/ffmpeg.ts`) stays the enforcement
+   point for the body-only guarantee, same as the single-freeze flow: it
+   never trusts a client-supplied background. For every output frame it
+   re-extracts that exact timestamp directly from the source video, then
+   blends it with the client's already-warped puppet image through that
+   frame's mask (`blendFrame`, alpha fixed at 1 — continuous mode has no
+   transition, the puppet is simply "on" for the whole range). The sequence
+   is encoded and spliced into [trimStartSec, trimEndSec] the same way the
+   freeze segment is today, except the original audio plays straight
+   through unmodified (no silence to splice in — nothing here changes
+   playback timing, since the replacement covers the same duration/frame
+   rate as the content it replaces).
+
+**Status**: all four steps' core logic is implemented and verified.
 `web/scripts/test-limbwarp.ts` covers bone-transform recovery, capsule
 geometry, and per-segment graceful dropout (a low-confidence joint drops
 just that limb, not the whole pose); `web/scripts/test-maskbuffer.ts` covers
@@ -194,11 +208,23 @@ the mask resize math (identity, constant-buffer stability, monotonic
 gradient interpolation, no overshoot). Both `videoPoseTrack.ts` and
 `videoMaskTrack.ts` also carry a `VITE_CV_MOCK=1` fallback, mirroring the
 existing single-frame CV mocks, with matching synthetic motion so a mocked
-run has pose and mask agreeing with each other. **Not yet built**: the
-frame-by-frame compositing/export pipeline for a continuous range (today's
-`lib/compositing.ts`/`lib/ffmpeg.ts` only know how to render one freeze
-segment) and a UI step to preview/approve it. A real test against actual
-reference footage (rather than only synthetic poses) is also still pending.
+run has pose and mask agreeing with each other.
+`server/scripts/continuous-smoke.mjs` exercises the real server-side
+pipeline end to end against a synthetic source video and synthetic
+per-frame puppet/mask images — verifying, with `ffprobe` and direct pixel
+diffs, that the exported file's resolution/duration match the source, that
+frames *outside* the replaced range stay pixel-identical to the source
+(the background-lock guarantee), and that frames *inside* it visibly
+contain the composited puppet content. Run with (after `npm run build` in
+`server/`): `node scripts/continuous-smoke.mjs`.
+
+**Not yet built**: the HTTP routes and session state to actually drive this
+pipeline from a real request (today it's proven at the library level, not
+wired to `routes/*`), the client-side glue that runs
+`videoPoseTrack`+`videoMaskTrack`+`limbWarp` across a chosen range and
+uploads the per-frame results, and a UI step to preview/approve it before
+export. A real test against actual reference footage (rather than only
+synthetic poses/puppets) is also still pending.
 
 ## Alternate: AI-generated anatomy (not in the primary flow)
 
@@ -281,6 +307,11 @@ network access to the model CDN.
 - `web/scripts/test-maskbuffer.ts` unit-tests continuous mode's per-frame
   mask resize math (`resizeMaskBuffer`). Run with:
   `cd web && npx tsx scripts/test-maskbuffer.ts`.
+- `server/scripts/continuous-smoke.mjs` exercises continuous mode's
+  server-side compositing/export pipeline end to end against a synthetic
+  video, verifying export resolution/duration and the background-lock
+  guarantee with direct pixel diffs. Run with (server built first):
+  `cd server && npm run build && node scripts/continuous-smoke.mjs`.
 - `server/scripts/e2e-smoke.mjs` drives the entire backend pipeline (upload
   → confirm frame → submit pose/mask → upload an anatomy image → exercise
   the chat endpoint for hold-duration/nudge/trim/freeze-point changes →

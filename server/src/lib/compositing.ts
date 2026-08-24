@@ -144,7 +144,7 @@ function blendFrameWipe(
 }
 
 /** result = original * (1 - mask*alpha) + anatomy * (mask*alpha), computed per-pixel in raw RGBA space. */
-function blendFrame(
+export function blendFrame(
   originalBuf: Buffer,
   anatomyBuf: Buffer,
   maskBuf: Buffer,
