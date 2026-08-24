@@ -164,7 +164,7 @@ export function composeManualAdjustment(
 }
 
 export function warpImageToCanvas(
-  image: HTMLImageElement,
+  image: CanvasImageSource,
   transform: AffineTransform,
   targetWidth: number,
   targetHeight: number,

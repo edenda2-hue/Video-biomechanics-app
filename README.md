@@ -23,11 +23,18 @@ is everything around that image:
    confirm; the exact frame is extracted directly from the video (ffmpeg),
    never synthesized.
 3. **Edit** — one screen combining:
-   - **Anatomy upload + auto-alignment**: you provide the anatomical image
-     for that exact frame. The CV Engine (in-browser pose estimation)
-     detects matching joints in both images and fits the precise scale/
-     rotation/position transform to line yours up on the original —
-     robust to a few bad joint matches (see "outlier rejection" below).
+   - **Anatomy upload + auto-fit**: upload an anatomical image — it doesn't
+     need to already match this frame's pose. The CV Engine (in-browser
+     pose estimation) detects joints in both images and, when every body
+     segment resolves, bends the anatomy image joint by joint
+     (`web/src/cv/limbWarp.ts`'s skeletal-puppet warp, the same mechanism
+     continuous mode below uses) to match this exact pose — so a generic
+     standing reference image ends up correctly bent for a squat, a
+     reach, a bent-over row, whatever the frame shows. When detection is
+     incomplete it falls back to a single whole-image scale/rotation/
+     position fit (robust to a few bad joint matches — see "outlier
+     rejection" below), which is what you'd want anyway for an image
+     already drawn to match this exact frame.
    - A **live canvas preview** of the body-only head-to-foot "wipe"
      transition (see below).
    - **Typeable controls** for the freeze point, hold duration, transition
@@ -348,10 +355,12 @@ network access to the model CDN.
 ## Known limitations
 
 - **Alignment quality depends on pose detection succeeding on your uploaded
-  image.** An abstract/stylized anatomical figure may detect fewer joints
-  than a photo; the app falls back to a centered scale-to-fit placement when
-  fewer than 3 joints match. The nudge sliders/chat are always available for
-  fine-tuning either way.
+  image.** The per-limb skeletal-puppet fit only engages when every one of
+  the 14 body segments resolves confidently; an abstract/stylized anatomical
+  figure may detect fewer joints than a photo, in which case it falls back
+  to a single whole-image fit (or a centered scale-to-fit placement when
+  fewer than 3 joints match at all). The nudge sliders/chat are always
+  available for fine-tuning regardless of which path was used.
 - **The offline chat mock has narrow language understanding** (English
   regex patterns only) — it's there so the mechanism is testable without an
   API key, not as a substitute for the real model. Add `OPENAI_API_KEY` for

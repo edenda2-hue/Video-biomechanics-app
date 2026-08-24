@@ -8,12 +8,17 @@ import {
   type AffineTransform,
   IDENTITY_TRANSFORM,
 } from "../cv/alignment";
+import { BONE_SEGMENTS, computeSegmentTransforms, renderSkeletalPuppetFrameFromPoses } from "../cv/limbWarp";
 import { detectPose } from "../cv/pose";
 import { segmentPerson } from "../cv/segmentation";
 import type { PoseKeypoint } from "../types";
 
 type Phase = "preparing-frame" | "need-anatomy" | "aligning" | "ready" | "error";
 type ChatMsg = { role: "user" | "assistant"; text: string };
+type MatchInfo =
+  | { mode: "puppet"; matched: number; total: number }
+  | { mode: "rigid"; matched: number; total: number }
+  | { mode: "center" };
 
 const DEFAULT_ADJUST = { offsetX: 0, offsetY: 0, scale: 1, rotationDeg: 0 };
 
@@ -43,8 +48,7 @@ export default function EditStep({
   const [originalPose, setOriginalPose] = useState<PoseKeypoint[] | null>(null);
   const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null);
 
-  const [autoTransform, setAutoTransform] = useState<AffineTransform>(IDENTITY_TRANSFORM);
-  const [matchInfo, setMatchInfo] = useState<{ matchedPoints: number; candidatePoints: number } | null>(null);
+  const [matchInfo, setMatchInfo] = useState<MatchInfo | null>(null);
   const [adjust, setAdjust] = useState(DEFAULT_ADJUST);
   const [anatomyImageUrl, setAnatomyImageUrl] = useState<string | null>(null);
 
@@ -65,6 +69,10 @@ export default function EditStep({
   const rawAnatomyImgRef = useRef<HTMLImageElement | null>(null);
   const rawAnatomySizeRef = useRef<{ width: number; height: number } | null>(null);
   const uploadedPoseRef = useRef<PoseKeypoint[]>([]);
+  // Mirrors `originalPose` state but updates synchronously, so rewarpAndUpload
+  // (called right after prepareFrame sets a new pose) never reads a stale
+  // value from before that state update has re-rendered.
+  const originalPoseRef = useRef<PoseKeypoint[] | null>(null);
 
   const originalImgRef = useRef<HTMLImageElement | null>(null);
   const maskedLayerRef = useRef<HTMLCanvasElement | null>(null);
@@ -87,6 +95,7 @@ export default function EditStep({
     const pose = await detectPose(img);
     const maskDataUrl = await segmentPerson(img, size.width, size.height);
     await submitPose(sessionId, pose, maskDataUrl);
+    originalPoseRef.current = pose;
     setOriginalPose(pose);
     setMaskVersion((v) => v + 1);
     setPhase(rawAnatomyImgRef.current ? "aligning" : "need-anatomy");
@@ -112,14 +121,9 @@ export default function EditStep({
       const img = await loadImage(url);
       rawAnatomyImgRef.current = img;
       rawAnatomySizeRef.current = { width: img.naturalWidth, height: img.naturalHeight };
-      const uploadedPose = await detectPose(img).catch(() => [] as PoseKeypoint[]);
-      uploadedPoseRef.current = uploadedPose;
-
-      const fit = fitSimilarityTransform(uploadedPose, originalPose, rawAnatomySizeRef.current, frameSize);
-      setMatchInfo({ matchedPoints: fit.matchedPoints, candidatePoints: fit.candidatePoints });
-      setAutoTransform(fit.matchedPoints >= 3 ? fit.transform : centerFitTransform(rawAnatomySizeRef.current, frameSize));
+      uploadedPoseRef.current = await detectPose(img).catch(() => [] as PoseKeypoint[]);
       setAdjust(DEFAULT_ADJUST);
-      await rewarpAndUpload(fit.matchedPoints >= 3 ? fit.transform : centerFitTransform(rawAnatomySizeRef.current, frameSize), DEFAULT_ADJUST, frameSize);
+      await rewarpAndUpload(DEFAULT_ADJUST, frameSize);
       setPhase("ready");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -127,16 +131,50 @@ export default function EditStep({
     }
   }
 
-  async function rewarpAndUpload(
-    transform: AffineTransform,
-    manualAdjust: typeof DEFAULT_ADJUST,
-    size: { width: number; height: number },
-  ) {
+  /**
+   * Fits the raw anatomy image onto `size` (the current frame's dimensions)
+   * against `originalPose`, then applies the manual nudge on top, and
+   * uploads the result. Prefers a full per-limb "skeletal puppet" warp
+   * (web/src/cv/limbWarp.ts — the same mechanism continuous mode uses) over
+   * a rigid whole-image fit whenever every bone segment can be resolved:
+   * that's what lets a *generic* standing anatomy image get bent to match
+   * this exact exercise pose, not just uniformly scaled/rotated/positioned
+   * onto it. Falls back to the rigid similarity fit (or a centered
+   * scale-to-fit) when the anatomy image's pose detection is incomplete —
+   * a partial puppet would leave visible gaps where unresolved limbs simply
+   * aren't drawn, which looks worse than a slightly-misaligned whole image.
+   */
+  async function rewarpAndUpload(manualAdjust: typeof DEFAULT_ADJUST, size: { width: number; height: number }) {
     const img = rawAnatomyImgRef.current;
-    if (!img) return;
+    const rawSize = rawAnatomySizeRef.current;
+    const targetPose = originalPoseRef.current;
+    if (!img || !rawSize || !targetPose) return;
+    const uploadedPose = uploadedPoseRef.current;
+
+    let baseCanvas: HTMLCanvasElement | HTMLImageElement = img;
+    if (uploadedPose.length > 0) {
+      const segments = computeSegmentTransforms(uploadedPose, targetPose, rawSize, size);
+      if (segments.size === BONE_SEGMENTS.length) {
+        baseCanvas = renderSkeletalPuppetFrameFromPoses(img, uploadedPose, targetPose, rawSize, size);
+        setMatchInfo({ mode: "puppet", matched: segments.size, total: BONE_SEGMENTS.length });
+      } else {
+        const fit = fitSimilarityTransform(uploadedPose, targetPose, rawSize, size);
+        const t = fit.matchedPoints >= 3 ? fit.transform : centerFitTransform(rawSize, size);
+        baseCanvas = warpImageToCanvas(img, t, size.width, size.height);
+        setMatchInfo(
+          fit.matchedPoints >= 3
+            ? { mode: "rigid", matched: fit.matchedPoints, total: fit.candidatePoints }
+            : { mode: "center" },
+        );
+      }
+    } else {
+      baseCanvas = warpImageToCanvas(img, centerFitTransform(rawSize, size), size.width, size.height);
+      setMatchInfo({ mode: "center" });
+    }
+
     const pivot = { x: size.width / 2, y: size.height / 2 };
-    const finalTransform = composeManualAdjustment(transform, manualAdjust, pivot);
-    const canvas = warpImageToCanvas(img, finalTransform, size.width, size.height);
+    const nudgeTransform = composeManualAdjustment(IDENTITY_TRANSFORM, manualAdjust, pivot);
+    const canvas = warpImageToCanvas(baseCanvas, nudgeTransform, size.width, size.height);
     const dataUrl = canvas.toDataURL("image/png");
     const { imageUrl } = await uploadAnatomyImage(sessionId, dataUrl);
     setAnatomyImageUrl(imageUrl);
@@ -148,7 +186,7 @@ export default function EditStep({
     setAdjust(nextAdjust);
     if (nudgeDebounce.current) clearTimeout(nudgeDebounce.current);
     nudgeDebounce.current = setTimeout(() => {
-      if (frameSize) rewarpAndUpload(autoTransform, nextAdjust, frameSize).catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      if (frameSize) rewarpAndUpload(nextAdjust, frameSize).catch((e) => setError(e instanceof Error ? e.message : String(e)));
     }, 300);
   }
 
@@ -318,13 +356,10 @@ export default function EditStep({
       setFreezeSec(confirmed);
       setFreezeSecInput(String(confirmed));
       setFrameUrl(`${newUrl}&t=${Date.now()}`);
-      const { pose, size } = await prepareFrame(`${newUrl}&t=${Date.now()}`);
+      const { size } = await prepareFrame(`${newUrl}&t=${Date.now()}`);
       if (rawAnatomyImgRef.current && rawAnatomySizeRef.current) {
-        const fit = fitSimilarityTransform(uploadedPoseRef.current, pose, rawAnatomySizeRef.current, size);
-        const transform = fit.matchedPoints >= 3 ? fit.transform : centerFitTransform(rawAnatomySizeRef.current, size);
-        setAutoTransform(transform);
         setAdjust(DEFAULT_ADJUST);
-        await rewarpAndUpload(transform, DEFAULT_ADJUST, size);
+        await rewarpAndUpload(DEFAULT_ADJUST, size);
       }
       setPhase("ready");
     } catch (e) {
@@ -354,13 +389,10 @@ export default function EditStep({
         setFreezeSec(result.timeline.freezeSec);
         setFreezeSecInput(String(result.timeline.freezeSec));
         setFrameUrl(result.frameUrl);
-        const { pose, size } = await prepareFrame(result.frameUrl);
+        const { size } = await prepareFrame(result.frameUrl);
         if (rawAnatomyImgRef.current && rawAnatomySizeRef.current) {
-          const fit = fitSimilarityTransform(uploadedPoseRef.current, pose, rawAnatomySizeRef.current, size);
-          const transform = fit.matchedPoints >= 3 ? fit.transform : centerFitTransform(rawAnatomySizeRef.current, size);
-          setAutoTransform(transform);
           setAdjust(DEFAULT_ADJUST);
-          await rewarpAndUpload(transform, DEFAULT_ADJUST, size);
+          await rewarpAndUpload(DEFAULT_ADJUST, size);
         }
         setPhase("ready");
       } else if (result.anatomyNudge && frameSize) {
@@ -372,7 +404,7 @@ export default function EditStep({
           rotationDeg: adjust.rotationDeg + (n.rotationDeltaDeg ?? 0),
         };
         setAdjust(next);
-        await rewarpAndUpload(autoTransform, next, frameSize);
+        await rewarpAndUpload(next, frameSize);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -386,8 +418,9 @@ export default function EditStep({
     <div className="card">
       <h2>3. Edit</h2>
       <p className="muted">
-        Upload the anatomical image you created for this exact frame — the app aligns it automatically. Then tune
-        timing/trim, or just tell the chat what to change.
+        Upload an anatomical image — even a generic standing reference, not one made for this exact pose — and the app
+        bends it joint by joint to match this frame automatically. Then tune timing/trim, or just tell the chat what
+        to change.
       </p>
 
       {(phase === "preparing-frame" || phase === "aligning") && (
@@ -415,9 +448,12 @@ export default function EditStep({
 
       {matchInfo && phase === "ready" && (
         <p className="muted">
-          {matchInfo.matchedPoints >= 3
-            ? `Auto-aligned using ${matchInfo.matchedPoints} of ${matchInfo.candidatePoints} detected joints.`
-            : "Couldn't reliably detect a pose in your image — placed it centered; use the sliders or chat to align it."}
+          {matchInfo.mode === "puppet" &&
+            `Bent every body segment (${matchInfo.matched}/${matchInfo.total}) to match this exact pose — works even with a generic standing anatomy image.`}
+          {matchInfo.mode === "rigid" &&
+            `Auto-aligned as a whole image using ${matchInfo.matched} of ${matchInfo.total} detected joints (not enough segments matched for a full per-limb fit — use the sliders or chat to fine-tune).`}
+          {matchInfo.mode === "center" &&
+            "Couldn't reliably detect a pose in your image — placed it centered; use the sliders or chat to align it."}
         </p>
       )}
 
