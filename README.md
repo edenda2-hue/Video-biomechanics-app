@@ -138,6 +138,61 @@ is set; without a key it falls back to a small regex-based mock
 testing/demo purposes, with much narrower language understanding than the
 real model.
 
+## Continuous-motion mode (in progress, not yet wired into the UI)
+
+The flow above produces one freeze-and-resume moment. The next milestone is
+a fundamentally bigger one: an anatomical figure that moves **through the
+whole exercise**, continuously, while the real background/equipment stays
+locked — matching reference clips the product is being built to match,
+rather than a single frozen pose.
+
+**Why not just call an AI video-generation API for this.** The obvious-
+looking shortcut — send the clip to a video-to-video model and ask it to
+restyle the person as an anatomical figure — was evaluated and rejected for
+now: Sora 2's API is being deprecated (removal announced), consumer "AI
+muscle filter" apps tested against this app's own reference clips didn't
+reach usable quality, and no provider surveyed exposes a documented
+video-to-video endpoint that both (a) preserves the background pixel-exact
+and (b) can be driven by API rather than only a consumer web UI. That combo
+is exactly this app's core guarantee (background never regenerates), so
+depending on an unconfirmed capability wasn't a safe bet — and it would
+also mean real, ongoing, per-export AI cost.
+
+**The approach being built instead: a 2D "skeletal puppet."** Reuse the
+single anatomy reference image you already provide (as today), but instead
+of only aligning it to one frame, rig it once and re-warp it, frame by
+frame, to track the person's pose through the whole clip:
+
+1. **Per-frame pose tracking** (`web/src/cv/videoPoseTrack.ts`) runs the
+   same MediaPipe pose model already used for alignment, but in its VIDEO
+   running mode across a whole time range instead of on one still frame,
+   producing a pose per sampled frame.
+2. **Per-limb rigid warp** (`web/src/cv/limbWarp.ts`) treats the anatomy
+   image as a set of bone segments (torso, each upper arm/forearm/hand,
+   each thigh/shin/foot, head — `BONE_SEGMENTS`). For each output frame,
+   every segment gets its own translate+rotate+scale transform
+   (`boneTransform`) carrying that segment's reference-image joints onto
+   the tracked joints for that frame, clipped to a soft-edged capsule
+   region around the bone (`capsulePolygon`) so segments overlap cleanly at
+   joints instead of tearing. This is standard 2D skeletal skinning, not AI
+   generation — it costs one reference image and CPU/GPU time, so cost and
+   latency don't scale with clip length the way per-frame AI calls would.
+3. Compositing reuses the existing body-only principle
+   (`result = original*(1-mask*alpha) + puppet*(mask*alpha)`), except the
+   mask now needs to track the person per frame too (segmentation in VIDEO
+   mode, same idea as step 1) instead of using one static mask.
+
+**Status**: steps 1–2's math is implemented and unit-tested
+(`web/scripts/test-limbwarp.ts`, run via `npx tsx scripts/test-limbwarp.ts`)
+— bone-transform recovery, capsule geometry, and per-segment resolution/
+graceful-dropout behavior (a low-confidence joint drops just that limb, not
+the whole pose) are all verified against synthetic poses. **Not yet built**:
+per-frame mask tracking, the frame-by-frame compositing/export pipeline for
+a continuous range (today's `lib/compositing.ts`/`lib/ffmpeg.ts` only know
+how to render one freeze segment), and a UI step to preview/approve it. A
+real test against actual reference footage (rather than only synthetic
+poses) is also still pending.
+
 ## Alternate: AI-generated anatomy (not in the primary flow)
 
 The original OpenAI-based design — the app itself calls `images.edit` on
@@ -212,6 +267,10 @@ network access to the model CDN.
   (`fitSimilarityTransform`/`composeManualAdjustment`), including RANSAC
   outlier rejection, against known synthetic transforms. Run with:
   `cd web && npx tsx scripts/test-alignment.ts`.
+- `web/scripts/test-limbwarp.ts` unit-tests the skeletal-puppet warp math
+  for continuous mode (`boneTransform`/`capsulePolygon`/
+  `computeSegmentTransforms`) against synthetic poses. Run with:
+  `cd web && npx tsx scripts/test-limbwarp.ts`.
 - `server/scripts/e2e-smoke.mjs` drives the entire backend pipeline (upload
   → confirm frame → submit pose/mask → upload an anatomy image → exercise
   the chat endpoint for hold-duration/nudge/trim/freeze-point changes →
