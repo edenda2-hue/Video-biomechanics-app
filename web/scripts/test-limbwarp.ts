@@ -1,7 +1,7 @@
 // Standalone sanity check for the skeletal-puppet warp math (pure geometry,
 // no DOM/canvas needed for these functions, so this runs directly under
 // tsx/node). Run with: npx tsx scripts/test-limbwarp.ts
-import { applyTransform, boneTransform, capsulePolygon, computeSegmentTransforms } from "../src/cv/limbWarp";
+import { applyTransform, boneTransform, capsulePolygon, computeSegmentTransforms, nearestPoseIndex, poseDistance } from "../src/cv/limbWarp";
 import type { BodyPart, PoseKeypoint } from "../src/types";
 
 function assert(cond: boolean, msg: string) {
@@ -141,6 +141,52 @@ function close(a: number, b: number, eps = 1e-6) {
   assert(!transforms.has("left_thigh"), "a low-confidence knee joint drops the left_thigh segment");
   assert(!transforms.has("left_shin"), "a low-confidence knee joint drops the left_shin segment");
   assert(transforms.has("right_thigh") && transforms.has("torso"), "unrelated segments still resolve when only one joint is low-confidence");
+}
+
+// --- poseDistance / nearestPoseIndex: multi-reference pose matching ---
+{
+  const standing: PoseKeypoint[] = [
+    { part: "head", x: 0.5, y: 0.1, confidence: 0.9 },
+    { part: "neck", x: 0.5, y: 0.18, confidence: 0.9 },
+    { part: "left_shoulder", x: 0.42, y: 0.2, confidence: 0.9 },
+    { part: "right_shoulder", x: 0.58, y: 0.2, confidence: 0.9 },
+    { part: "left_elbow", x: 0.4, y: 0.35, confidence: 0.9 }, // arm hanging straight down
+    { part: "right_elbow", x: 0.6, y: 0.35, confidence: 0.9 },
+    { part: "left_wrist", x: 0.38, y: 0.5, confidence: 0.9 },
+    { part: "right_wrist", x: 0.62, y: 0.5, confidence: 0.9 },
+    { part: "left_hip", x: 0.45, y: 0.5, confidence: 0.9 },
+    { part: "right_hip", x: 0.55, y: 0.5, confidence: 0.9 },
+    { part: "left_knee", x: 0.45, y: 0.7, confidence: 0.9 }, // leg straight down
+    { part: "right_knee", x: 0.55, y: 0.7, confidence: 0.9 },
+    { part: "left_ankle", x: 0.45, y: 0.9, confidence: 0.9 },
+    { part: "right_ankle", x: 0.55, y: 0.9, confidence: 0.9 },
+  ];
+  // Overhead lockout: arms straight up instead of down (a ~180deg change at the shoulder).
+  const overhead: PoseKeypoint[] = standing.map((k) => {
+    if (k.part === "left_elbow") return { ...k, y: 0.05 };
+    if (k.part === "right_elbow") return { ...k, y: 0.05 };
+    if (k.part === "left_wrist") return { ...k, y: -0.1 };
+    if (k.part === "right_wrist") return { ...k, y: -0.1 };
+    return k;
+  });
+  // A near-identical standing pose, just scaled 1.4x and shifted — should read as "close" despite different scale/position.
+  const standingScaled: PoseKeypoint[] = standing.map((k) => ({ ...k, x: k.x * 1.4 + 0.3, y: k.y * 1.4 + 0.1 }));
+  // A standing pose with only the knees bent slightly (much smaller articulation change than the overhead swing).
+  const slightBend: PoseKeypoint[] = standing.map((k) => {
+    if (k.part === "left_knee") return { ...k, x: k.x + 0.02, y: k.y - 0.03 };
+    if (k.part === "right_knee") return { ...k, x: k.x - 0.02, y: k.y - 0.03 };
+    return k;
+  });
+
+  assert(poseDistance(standing, standing) < 1e-9, "poseDistance is ~0 for a pose compared to itself");
+  assert(poseDistance(standing, standingScaled) < 1e-6, "poseDistance is scale/position-invariant");
+  const distToOverhead = poseDistance(standing, overhead);
+  const distToSlightBend = poseDistance(standing, slightBend);
+  assert(distToOverhead > distToSlightBend, "an overhead-arms pose reads as further from standing than a slight knee bend does");
+  assert(distToOverhead > 0.5, "a ~180deg arm swing produces a large pose distance");
+
+  const nearest = nearestPoseIndex(slightBend, [overhead, standing, standingScaled]);
+  assert(nearest === 1, `nearestPoseIndex picks the standing reference (closest articulation) for a slight-bend query, got index ${nearest}`);
 }
 
 console.log("\nAll limb-warp checks passed.");

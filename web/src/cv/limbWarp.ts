@@ -127,6 +127,59 @@ function toPixel(k: PoseKeypoint, size: { width: number; height: number }): Poin
   return { x: k.x * size.width, y: k.y * size.height };
 }
 
+/** The bone's orientation angle (radians) within its own pose, or null if either joint isn't confidently detected. Scale/position-invariant — only the direction matters. */
+function boneAngle(pose: PoseKeypoint[], seg: BoneSegment, minConfidence = 0.3): number | null {
+  const byPart = new Map(pose.map((k) => [k.part, k]));
+  const a = byPart.get(seg.proximal);
+  const b = byPart.get(seg.distal);
+  if (!a || !b || a.confidence < minConfidence || b.confidence < minConfidence) return null;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  if (Math.hypot(dx, dy) < 1e-6) return null;
+  return Math.atan2(dy, dx);
+}
+
+/**
+ * How different two poses' *articulation* is — i.e. how differently each
+ * limb is oriented — independent of where the person is in frame or how
+ * big they appear. Used to pick, among several anatomy reference images
+ * (each in its own pose), the one whose joint angles are closest to a given
+ * exercise frame before warping it, since a single reference image can only
+ * be stretched so far from its original pose before the per-limb warp looks
+ * wrong (e.g. a standing reference warped toward an overhead lockout).
+ * Returns the mean angular difference (radians, 0 = identical articulation)
+ * over every bone segment confidently resolved in both poses; `Infinity` if
+ * none resolve in both (the two poses share no comparable segment).
+ */
+export function poseDistance(poseA: PoseKeypoint[], poseB: PoseKeypoint[]): number {
+  let sum = 0;
+  let count = 0;
+  for (const seg of BONE_SEGMENTS) {
+    const angleA = boneAngle(poseA, seg);
+    const angleB = boneAngle(poseB, seg);
+    if (angleA === null || angleB === null) continue;
+    let diff = Math.abs(angleA - angleB) % (2 * Math.PI);
+    if (diff > Math.PI) diff = 2 * Math.PI - diff;
+    sum += diff;
+    count++;
+  }
+  return count > 0 ? sum / count : Infinity;
+}
+
+/** Index of the reference pose in `references` whose articulation is closest to `targetPose` (see poseDistance). */
+export function nearestPoseIndex(targetPose: PoseKeypoint[], references: PoseKeypoint[][]): number {
+  let bestIndex = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < references.length; i++) {
+    const d = poseDistance(targetPose, references[i]);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIndex = i;
+    }
+  }
+  return bestIndex;
+}
+
 /**
  * Per-segment rigid transforms (reference anatomy image pixel space ->
  * target frame pixel space) for every bone segment whose four endpoints

@@ -416,7 +416,7 @@ export default function EditStep({
 
   return (
     <div className="card">
-      <h2>3. Edit</h2>
+      <h2>4. Edit</h2>
       <p className="muted">
         Upload an anatomical image — even a generic standing reference, not one made for this exact pose — and the app
         bends it joint by joint to match this frame automatically. Then tune timing/trim, or just tell the chat what

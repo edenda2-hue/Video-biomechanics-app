@@ -44,7 +44,7 @@ export default function FrameSelectStep({
 
   return (
     <div className="card">
-      <h2>2. Select Frame</h2>
+      <h2>3. Select Frame</h2>
       <p className="muted">Scrub the timeline to the exact moment you want to analyze, then confirm the frame.</p>
       {objectUrl && (
         <video
