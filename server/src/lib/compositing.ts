@@ -178,7 +178,12 @@ async function blendFrameWipe(
   const feather = span * 0.12;
   const threshold = bounds.top - feather / 2 + t * (span + feather);
 
-  const out = Buffer.alloc(width * height * 4);
+  // Only the per-pixel *alpha* is computed in JS (one cheap multiply per
+  // pixel); the actual RGB blending is done by compositeOver() using
+  // sharp/libvips' native "over" compositing, which runs on libvips' own
+  // worker thread pool rather than Node's main JS thread — see
+  // compositeOver()'s doc comment for why that matters here.
+  const anatomyWithAlpha = Buffer.from(anatomyBuf);
   const ROWS_PER_CHUNK = 64;
   for (let y = 0; y < height; y++) {
     const ny = y / height;
@@ -188,19 +193,14 @@ async function blendFrameWipe(
     const rowStart = y * width;
     for (let x = 0; x < width; x++) {
       const p = rowStart + x;
-      const m = (maskBuf[p] / 255) * rowAlpha;
-      const o = p * 4;
-      for (let c = 0; c < 3; c++) {
-        out[o + c] = Math.round(originalBuf[o + c] * (1 - m) + anatomyBuf[o + c] * m);
-      }
-      out[o + 3] = 255;
+      anatomyWithAlpha[p * 4 + 3] = Math.round(maskBuf[p] * rowAlpha);
     }
     if (y % ROWS_PER_CHUNK === ROWS_PER_CHUNK - 1) await yieldToEventLoop();
   }
-  return out;
+  return compositeOver(originalBuf, anatomyWithAlpha, width, height);
 }
 
-/** result = original * (1 - mask*alpha) + anatomy * (mask*alpha), computed per-pixel in raw RGBA space. */
+/** result = original * (1 - mask*alpha) + anatomy * (mask*alpha), computed via native alpha compositing. */
 export async function blendFrame(
   originalBuf: Buffer,
   anatomyBuf: Buffer,
@@ -209,19 +209,34 @@ export async function blendFrame(
   width: number,
   height: number,
 ): Promise<Buffer> {
-  const out = Buffer.alloc(width * height * 4);
-  const PIXELS_PER_CHUNK = 200_000;
+  const anatomyWithAlpha = Buffer.from(anatomyBuf);
   const total = width * height;
+  const PIXELS_PER_CHUNK = 500_000;
   for (let p = 0; p < total; p++) {
-    const m = (maskBuf[p] / 255) * alpha;
-    const o = p * 4;
-    for (let c = 0; c < 3; c++) {
-      out[o + c] = Math.round(originalBuf[o + c] * (1 - m) + anatomyBuf[o + c] * m);
-    }
-    out[o + 3] = 255;
+    anatomyWithAlpha[p * 4 + 3] = Math.round(maskBuf[p] * alpha);
     if (p % PIXELS_PER_CHUNK === PIXELS_PER_CHUNK - 1) await yieldToEventLoop();
   }
-  return out;
+  return compositeOver(originalBuf, anatomyWithAlpha, width, height);
+}
+
+/**
+ * Composites `topWithAlpha` (RGBA, its alpha channel already set to
+ * exactly the per-pixel blend weight the caller wants) over `baseBuf`,
+ * via sharp/libvips' native Porter-Duff "over" operator — which is
+ * precisely `result = base*(1-a) + top*a`, the same formula this file
+ * used to compute by hand in a JS loop. The earlier hand-rolled version
+ * blocked Node's single-threaded event loop for the entire blend (all
+ * three RGB channels, every pixel) with no way to truly run concurrently
+ * with anything else; libvips does this work on its own native thread
+ * pool, so the Node event loop — and the export-status poll requests the
+ * UI depends on — stay responsive throughout, not just "yield often
+ * enough that blocking is hopefully short."
+ */
+async function compositeOver(baseBuf: Buffer, topWithAlpha: Buffer, width: number, height: number): Promise<Buffer> {
+  return sharp(baseBuf, { raw: { width, height, channels: 4 } })
+    .composite([{ input: topWithAlpha, raw: { width, height, channels: 4 }, blend: "over" }])
+    .raw()
+    .toBuffer();
 }
 
 /** Bakes leader-line + muscle-name overlays onto an anatomy image as real pixels (used for the frozen hold + transitions). */

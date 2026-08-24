@@ -105,10 +105,20 @@ literally, not just as a prompt instruction:
    proposes a transform, the one with the most inliers wins, and the final
    transform is refit over just that inlier set — unit-tested in
    `web/scripts/test-alignment.ts`, including a case with corrupted points.
-3. For every frame of the transition, `lib/compositing.ts` computes, per
-   pixel, `result = original*(1 - mask*alpha) + anatomy*(mask*alpha)`.
-   Outside the mask, `alpha` never affects the output — background pixels
-   are always the literal original bytes. Inside the mask, the default
+3. For every frame of the transition, `lib/compositing.ts` computes
+   `result = original*(1 - mask*alpha) + anatomy*(mask*alpha)`: the
+   per-pixel `alpha` is computed in JS (cheap — one multiply per pixel),
+   then the actual RGB blend is done via sharp/libvips' native Porter-Duff
+   "over" compositing rather than a hand-rolled JS loop over every channel
+   — that runs on libvips' own worker thread pool instead of blocking
+   Node's single-threaded event loop, which matters because that loop
+   handling many full-resolution frames used to be able to starve
+   concurrent requests (notably the export-status poll) long enough for a
+   platform's proxy to time them out, even though the job itself was still
+   running fine (`server/scripts/responsiveness-stress.mjs` guards against
+   this regressing). Outside the mask, `alpha` never affects the output —
+   background pixels are always the literal original bytes. Inside the
+   mask, the default
    **"wipe" style** sweeps `alpha` from head to foot (a soft-edged line
    descends over ~0.6s, so the anatomy "puts itself on" top-down) rather
    than a uniform crossfade; it holds fully "on," then sweeps the same way
@@ -456,6 +466,14 @@ network access to the model CDN.
   that the body region actually shows the anatomy image, and that footage
   before the first keyframe is untouched. Run with the server up:
   `node server/scripts/keyframes-smoke.mjs`.
+- `server/scripts/responsiveness-stress.mjs` guards against the class of bug
+  that once caused a real production 502 mid-export (compositing.ts's blend
+  loops blocking Node's single-threaded event loop long enough that the
+  status-poll request couldn't be serviced, so the platform's proxy timed
+  it out even though the job was fine). Fires a health-check request every
+  100ms throughout a real 1920x1080 keyframe export and asserts every one
+  succeeds with well under a second of latency. Run with the server up:
+  `node server/scripts/responsiveness-stress.mjs`.
 - `npm run typecheck` (root) typechecks both packages.
 
 ## Known limitations

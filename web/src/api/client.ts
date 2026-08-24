@@ -5,13 +5,17 @@ const BASE = "/api";
 async function handle<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
     const body = await resp.text();
-    let message = body;
+    // A non-JSON error body is usually a platform proxy's own error page
+    // (e.g. an HTML 502/504 page), not something from this app — showing
+    // it raw is useless noise, so fall back to a short, honest message
+    // instead of dumping markup into the UI.
+    let message: string;
     try {
-      message = JSON.parse(body).error ?? body;
+      message = JSON.parse(body).error ?? `Request failed: ${resp.status}`;
     } catch {
-      // not JSON, use raw text
+      message = `Request failed: ${resp.status} (the server didn't return a normal response — it may be temporarily overloaded)`;
     }
-    throw new Error(message || `Request failed: ${resp.status}`);
+    throw new Error(message);
   }
   return resp.json() as Promise<T>;
 }
