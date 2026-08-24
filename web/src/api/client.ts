@@ -1,4 +1,4 @@
-import type { LabelPlacement, MuscleSuggestion, PoseKeypoint, QualityScore, Session, VideoMetadata } from "../types";
+import type { Keyframe, LabelPlacement, MuscleSuggestion, PoseKeypoint, QualityScore, Session, VideoMetadata } from "../types";
 
 const BASE = "/api";
 
@@ -210,4 +210,69 @@ export async function startContinuousExport(id: string, frames: ContinuousFrameP
 
 export async function getContinuousExportStatus(id: string): Promise<ExportJobStatus> {
   return handle(await fetch(`${BASE}/sessions/${id}/continuous/export/status`));
+}
+
+// --- Anatomy Keyframes mode: as many freeze points as you choose, each
+// anchored to a downloadable extracted frame so you can generate a precise
+// anatomy image for it externally (ChatGPT/Sora/etc.) and upload it back.
+// The head is always excluded from the swap server-side.
+
+export async function addKeyframe(id: string, timeSec: number): Promise<{ id: string; timeSec: number; frameUrl: string }> {
+  return handle(
+    await fetch(`${BASE}/sessions/${id}/keyframes`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ timeSec }),
+    }),
+  );
+}
+
+export async function listKeyframes(id: string): Promise<{ keyframes: Keyframe[] }> {
+  return handle(await fetch(`${BASE}/sessions/${id}/keyframes`));
+}
+
+export async function submitKeyframePose(id: string, kfId: string, pose: PoseKeypoint[], maskPngBase64: string): Promise<void> {
+  await handle(
+    await fetch(`${BASE}/sessions/${id}/keyframes/${kfId}/pose`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pose, maskPngBase64 }),
+    }),
+  );
+}
+
+export async function uploadKeyframeAnatomy(id: string, kfId: string, imagePngBase64: string): Promise<{ imageUrl: string }> {
+  return handle(
+    await fetch(`${BASE}/sessions/${id}/keyframes/${kfId}/anatomy`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ imagePngBase64 }),
+    }),
+  );
+}
+
+export async function updateKeyframe(
+  id: string,
+  kfId: string,
+  patch: Partial<Pick<Keyframe, "holdDurationSec" | "transitionInSec" | "transitionOutSec">>,
+): Promise<Keyframe> {
+  return handle(
+    await fetch(`${BASE}/sessions/${id}/keyframes/${kfId}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
+export async function deleteKeyframe(id: string, kfId: string): Promise<void> {
+  await handle(await fetch(`${BASE}/sessions/${id}/keyframes/${kfId}`, { method: "DELETE" }));
+}
+
+export async function startKeyframesExport(id: string): Promise<{ jobId: string }> {
+  return handle(await fetch(`${BASE}/sessions/${id}/keyframes/export`, { method: "POST" }));
+}
+
+export async function getKeyframesExportStatus(id: string): Promise<ExportJobStatus> {
+  return handle(await fetch(`${BASE}/sessions/${id}/keyframes/export/status`));
 }

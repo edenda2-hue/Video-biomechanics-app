@@ -66,6 +66,16 @@ export interface LabelPlacement {
   leaderPath: { x: number; y: number }[];
 }
 
+/** One freeze point in Anatomy Keyframes mode — see server/src/types.ts's Keyframe for the full picture. */
+export interface Keyframe {
+  id: string;
+  timeSec: number;
+  pose?: PoseKeypoint[];
+  holdDurationSec: number;
+  transitionInSec: number;
+  transitionOutSec: number;
+}
+
 export interface Session {
   id: string;
   metadata?: VideoMetadata;
@@ -80,4 +90,5 @@ export interface Session {
   muscles: MuscleSuggestion[];
   labels: LabelPlacement[];
   attempts: number;
+  keyframes: Keyframe[];
 }

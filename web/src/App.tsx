@@ -3,11 +3,12 @@ import ContinuousStep from "./components/ContinuousStep";
 import EditStep from "./components/EditStep";
 import ExportStep from "./components/ExportStep";
 import FrameSelectStep from "./components/FrameSelectStep";
+import KeyframesStep from "./components/KeyframesStep";
 import Stepper from "./components/Stepper";
 import UploadStep from "./components/UploadStep";
 import type { VideoMetadata } from "./types";
 
-type Mode = "freeze" | "continuous";
+type Mode = "freeze" | "continuous" | "keyframes";
 
 interface WizardState {
   step: number;
@@ -21,6 +22,7 @@ interface WizardState {
 
 const FREEZE_LABELS = ["Upload", "Mode", "Select Frame", "Edit", "Export"];
 const CONTINUOUS_LABELS = ["Upload", "Mode", "Continuous"];
+const KEYFRAMES_LABELS = ["Upload", "Mode", "Keyframes"];
 
 export default function App() {
   const [state, setState] = useState<WizardState>({ step: 0 });
@@ -50,7 +52,10 @@ export default function App() {
       </header>
       <main className="app-body">
         <div className="row" style={{ marginBottom: 12, alignItems: "center" }}>
-          <Stepper current={state.step} labels={state.mode === "continuous" ? CONTINUOUS_LABELS : FREEZE_LABELS} />
+          <Stepper
+            current={state.step}
+            labels={state.mode === "continuous" ? CONTINUOUS_LABELS : state.mode === "keyframes" ? KEYFRAMES_LABELS : FREEZE_LABELS}
+          />
           {history.length > 0 && (
             <button className="secondary" onClick={goBack}>
               ← Back
@@ -76,6 +81,14 @@ export default function App() {
                 <button onClick={() => advance({ ...state, step: 2, mode: "continuous" })}>Continuous motion (experimental)</button>
               </div>
               <div className="card" style={{ flex: 1, margin: 0 }}>
+                <h3>Anatomy Keyframes</h3>
+                <p className="muted">
+                  Pick as many moments as you want; each freezes with the body swapped to anatomy (head excluded — the real person's
+                  face always shows). Download each frame and generate a precise anatomy image for it yourself for maximum accuracy.
+                </p>
+                <button onClick={() => advance({ ...state, step: 2, mode: "keyframes" })}>Anatomy Keyframes</button>
+              </div>
+              <div className="card" style={{ flex: 1, margin: 0 }}>
                 <h3>Single freeze point</h3>
                 <p className="muted">
                   Pick one moment; the video freezes there, the anatomy figure appears, holds, then the original body returns and the
@@ -91,6 +104,10 @@ export default function App() {
 
         {state.mode === "continuous" && state.step === 2 && state.sessionId && state.file && state.metadata && (
           <ContinuousStep sessionId={state.sessionId} file={state.file} metadata={state.metadata} />
+        )}
+
+        {state.mode === "keyframes" && state.step === 2 && state.sessionId && state.file && state.metadata && (
+          <KeyframesStep sessionId={state.sessionId} file={state.file} metadata={state.metadata} />
         )}
 
         {state.mode === "freeze" && state.step === 2 && state.sessionId && state.file && state.metadata && (

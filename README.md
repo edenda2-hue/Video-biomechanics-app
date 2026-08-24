@@ -1,19 +1,26 @@
 # Video Biomechanics App
 
 Turns a real training/sports video into a professional anatomical
-visualization. After upload, you choose one of two modes:
+visualization. After upload, you choose one of three modes:
 
 - **Continuous motion** (the primary goal this app is built toward): the
   anatomy figure moves through the *whole* exercise, following the person's
   actual movement rep by rep — no freezing. See "Continuous-motion mode"
   below.
+- **Anatomy Keyframes**: pick as many moments as you want; each freezes
+  with the body (not the head — the real person's face always shows)
+  swapped to an anatomy image, holds for a duration you choose, then the
+  original resumes. Built around downloading the exact frame and generating
+  a precise anatomy image for it externally for maximum accuracy. See
+  "Anatomy Keyframes mode" below.
 - **Single freeze point**: the video freezes on one moment, the person
   becomes an anatomical figure (a head-to-foot "wipe" reveal), holds, then
   the figure sweeps back into the person and the video resumes.
 
-The original video is always the source of truth in both modes. The camera,
+The original video is always the source of truth in every mode. The camera,
 background, equipment, floor and lighting never move or regenerate — only
-the human body is ever replaced.
+the human body is ever replaced. A "← Back" button (a real history stack,
+not just a step counter) is available on every screen after Upload.
 
 ## Bring your own anatomy image(s)
 
@@ -73,10 +80,13 @@ server/  Node + TypeScript API: session/workflow state and the "Video
 | Responsibility | Where |
 |---|---|
 | Pose estimation, human segmentation, pose-based image alignment | `web/src/cv/*` (`pose.ts`, `segmentation.ts`, `alignment.ts`) |
-| Edit screen (upload+align, live preview, timing/trim controls, chat UI) | `web/src/components/EditStep.tsx` |
+| Shared "fit one anatomy image onto one target pose" logic (puppet warp / rigid fit / centered fallback) | `web/src/cv/anatomyFit.ts` |
+| Edit screen (upload+align, live preview, timing/trim controls, chat UI) — single freeze point mode | `web/src/components/EditStep.tsx` |
+| Anatomy Keyframes UI (add/edit/delete keyframes, per-keyframe frame download + anatomy upload + timing) | `web/src/components/KeyframesStep.tsx` |
 | AI edit chat (interprets requests into parameter changes; offline regex mock or real OpenAI) | `server/src/lib/openai/chatEdit.ts`, `server/src/routes/chat.ts` |
 | Workflow/session state | `server/src/routes/*` |
-| Frame extraction, freeze, body-only wipe transition, compositing, audio, resume, export/trim | `server/src/lib/ffmpeg.ts`, `server/src/lib/compositing.ts` |
+| Frame extraction, freeze, body-only wipe transition, head exclusion, compositing, audio, resume, export/trim | `server/src/lib/ffmpeg.ts`, `server/src/lib/compositing.ts` |
+| Anatomy Keyframes routes (CRUD + multi-segment export) | `server/src/routes/keyframes.ts` |
 
 ### The core mechanic: body-only transition
 
@@ -290,6 +300,61 @@ capsule-region seams acceptable, does the limb topology hold up on
 non-standing exercises, is one reference pose per rep phase enough) is
 still unvalidated.
 
+## Anatomy Keyframes mode
+
+The single-freeze flow's precision comes from anchoring to one exact,
+downloadable frame that you (or ChatGPT/Sora/etc. on your behalf) generate
+an anatomy image for externally. Anatomy Keyframes generalizes that from
+one anchor point to as many as you choose, so a whole exercise can be
+covered by several precisely-generated anatomy images instead of relying on
+one image's geometric warp to cover the whole range of motion.
+
+**How it works:**
+
+1. **Add a keyframe** at any timestamp: the exact frame is extracted
+   directly from the source video (never synthesized) and pose/segmentation
+   run on it immediately, so it's ready to receive an anatomy image.
+2. **Download that exact frame** (a real `<a download>` link, not just a
+   preview) — feed it into ChatGPT/Sora/whatever externally for the most
+   precise possible anatomy image, or skip this and upload any generic
+   reference instead.
+3. **Upload the anatomy image** for that keyframe — it's fit to the
+   keyframe's specific pose the same way the single-freeze flow does
+   (`web/src/cv/anatomyFit.ts`, shared by both): a full per-limb "skeletal
+   puppet" warp when every bone segment resolves, falling back to a rigid
+   whole-image fit otherwise.
+4. **Head excluded, always.** Every keyframe's swap composites the body
+   only — `server/src/lib/compositing.ts`'s `excludeHeadFromMask` zeroes a
+   circular region around the head (sized from the head-to-neck distance in
+   the frame's own detected pose) in the compositing mask before blending,
+   so the real person's head/face shows through even during the hold. This
+   keeps the output identifiable as the same person throughout, with only
+   the body becoming anatomical.
+5. **Everything stays editable up until export**: hold duration, transition
+   in/out speed, and the anatomy image itself, per keyframe — add or remove
+   keyframes freely, no approval gate blocks further edits.
+6. **Export** renders every keyframe's freeze segment and splices all of
+   them into the original video at their own timestamps in one pass
+   (`server/src/lib/ffmpeg.ts`'s `assembleMultiFreezeVideo`, generalizing
+   the single-freeze splice from one point to N), as a background job with
+   the same progress-polling pattern as the other two modes.
+
+**Status**: fully implemented and verified, both at the library level
+(`server/scripts/keyframes-smoke.mjs` — multiple keyframes with
+independently-edited hold durations splice into one video at the correct
+total duration; the head region stays close to the source pixel-for-pixel
+during a hold while the body region visibly shows the anatomy image;
+footage outside any keyframe's hold stays untouched) and with a real
+Playwright run through the actual UI (two keyframes, frame download links
+present, anatomy upload + auto-fit for each, hold-duration edit, export to
+a downloadable video).
+
+**Known limitations**: no live preview before export (unlike the
+single-freeze flow's canvas preview) — the exported video is the first
+time you see the composited result; keyframes' timestamps can't currently
+be moved after creation (delete and re-add instead); and like the other
+modes, it hasn't been tried against real reference footage yet.
+
 ## Alternate: AI-generated anatomy (not in the primary flow)
 
 The original OpenAI-based design — the app itself calls `images.edit` on
@@ -383,6 +448,14 @@ network access to the model CDN.
   synthetic ffmpeg-generated test video, then verifies the exported MP4's
   resolution/fps/duration/audio with `ffprobe`. Run with the server up:
   `node server/scripts/e2e-smoke.mjs`.
+- `server/scripts/keyframes-smoke.mjs` exercises Anatomy Keyframes mode end
+  to end against the real HTTP API: adds two keyframes, downloads one's
+  frame, submits pose/mask, uploads a distinct anatomy image per keyframe,
+  edits one's hold duration, exports, then verifies duration, the
+  head-exclusion guarantee (pixel diff in the head region vs. the source),
+  that the body region actually shows the anatomy image, and that footage
+  before the first keyframe is untouched. Run with the server up:
+  `node server/scripts/keyframes-smoke.mjs`.
 - `npm run typecheck` (root) typechecks both packages.
 
 ## Known limitations
