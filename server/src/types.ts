@@ -83,6 +83,16 @@ export interface Session {
   /** Export trims the source video to [trimStartSec, trimEndSec] before splicing in the freeze. */
   trimStartSec: number;
   trimEndSec?: number;
+  /**
+   * Continuous mode: the anatomy figure moves through this whole range
+   * (instead of a single freeze) via server/src/lib/continuousComposite.ts.
+   * Must fall within [trimStartSec, trimEndSec]. Reuses `pose` and
+   * `anatomyImagePath` as the reference pose/image the puppet is rigged
+   * from, since the uploaded anatomy image is already warped to align with
+   * the frame `pose` was detected on.
+   */
+  continuousStartSec?: number;
+  continuousEndSec?: number;
   exerciseName?: string;
   originalFramePath?: string;
   maskPath?: string;

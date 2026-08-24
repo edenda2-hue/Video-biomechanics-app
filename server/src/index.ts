@@ -12,12 +12,17 @@ import { musclesRouter } from "./routes/muscles.js";
 import { highlightRouter } from "./routes/highlight.js";
 import { exportRouter } from "./routes/exportRouter.js";
 import { chatRouter } from "./routes/chat.js";
+import { continuousRouter } from "./routes/continuous.js";
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "25mb" }));
+// Continuous mode's export request carries a puppet+mask PNG per output
+// frame in one JSON body (no live key/API to stream against yet — see
+// README's "Continuous-motion mode" section), so the limit is well above
+// the single-frame routes' needs.
+app.use(express.json({ limit: "80mb" }));
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
@@ -28,6 +33,7 @@ app.use("/api", musclesRouter);
 app.use("/api", highlightRouter);
 app.use("/api", exportRouter);
 app.use("/api", chatRouter);
+app.use("/api", continuousRouter);
 
 // Single-service deployment (see Dockerfile / render.yaml): if a built web
 // app is present, serve it from the same process/port as the API so the

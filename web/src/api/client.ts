@@ -174,3 +174,40 @@ export async function sendChatEdit(id: string, message: string): Promise<ChatEdi
     }),
   );
 }
+
+// --- Continuous mode (experimental): the anatomy figure moves through a
+// whole range instead of one freeze point. See README's "Continuous-motion
+// mode" section for the architecture (skeletal puppet warp + per-frame
+// mask tracking, both client-side; server re-composites from the source of
+// truth and never trusts a client-supplied background).
+
+export async function setContinuousRange(id: string, startSec: number, endSec: number): Promise<{ continuousStartSec: number; continuousEndSec: number }> {
+  return handle(
+    await fetch(`${BASE}/sessions/${id}/continuous/range`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ startSec, endSec }),
+    }),
+  );
+}
+
+export interface ContinuousFramePayload {
+  tSec: number;
+  puppetPngBase64: string;
+  maskPngBase64: string;
+}
+
+/** Uploads the client-computed per-frame puppet+mask sequence and starts the server-side render as a background job; poll getContinuousExportStatus for progress. */
+export async function startContinuousExport(id: string, frames: ContinuousFramePayload[]): Promise<{ jobId: string }> {
+  return handle(
+    await fetch(`${BASE}/sessions/${id}/continuous/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ frames }),
+    }),
+  );
+}
+
+export async function getContinuousExportStatus(id: string): Promise<ExportJobStatus> {
+  return handle(await fetch(`${BASE}/sessions/${id}/continuous/export/status`));
+}

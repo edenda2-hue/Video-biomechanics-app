@@ -218,13 +218,37 @@ frames *outside* the replaced range stay pixel-identical to the source
 contain the composited puppet content. Run with (after `npm run build` in
 `server/`): `node scripts/continuous-smoke.mjs`.
 
-**Not yet built**: the HTTP routes and session state to actually drive this
-pipeline from a real request (today it's proven at the library level, not
-wired to `routes/*`), the client-side glue that runs
-`videoPoseTrack`+`videoMaskTrack`+`limbWarp` across a chosen range and
-uploads the per-frame results, and a UI step to preview/approve it before
-export. A real test against actual reference footage (rather than only
-synthetic poses/puppets) is also still pending.
+**It's wired up end to end now**, behind a "Continuous mode (experimental)"
+card on the Export screen (`web/src/components/ContinuousStep.tsx`):
+1. `web/src/cv/continuousPipeline.ts` ties the three CV pieces together —
+   pose tracking, then mask tracking (both seek the same `<video>` element,
+   so they run sequentially, not in parallel), then renders each frame's
+   puppet — and hands the server a `{tSec, puppetPngBase64, maskPngBase64}`
+   array. A frame where pose or mask detection dropped out carries the
+   nearest earlier frame's result forward instead of aborting the whole
+   range.
+2. `server/src/routes/continuous.ts` adds `PUT .../continuous/range` and
+   `POST .../continuous/export` (+ status/file routes, mirroring the
+   single-freeze export's async-job/polling pattern under its own job
+   namespace so the two never collide). It reuses `session.pose` and
+   `anatomyImagePath` as the puppet's rig reference, since the uploaded
+   anatomy image is already warped to align with the frame `pose` was
+   detected on — no separate "anatomy's own pose" needs to be tracked.
+3. Verified with a real Playwright run through the whole wizard (upload →
+   frame → align an anatomy image → approve → set a continuous range →
+   generate) under `VITE_CV_MOCK=1`, confirming the full round trip
+   actually produces a downloadable video, not just that each piece
+   type-checks in isolation.
+
+**Known limitations of this first pass**: the range is capped at 6s in the
+UI (untuned for longer clips — client-side tracking time and upload payload
+size both scale with frame count); the per-frame payload is one big JSON
+POST rather than a stream, so very long/high-resolution ranges could hit
+the server's request size limit; and it hasn't been tried against real
+reference footage yet, only synthetic test videos — visual quality (does
+the puppet actually look like the kinezio.fitness reference, are the
+capsule-region seams acceptable, does the limb topology hold up on
+non-standing exercises) is still unvalidated.
 
 ## Alternate: AI-generated anatomy (not in the primary flow)
 

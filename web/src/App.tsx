@@ -1,4 +1,5 @@
 import { useState } from "react";
+import ContinuousStep from "./components/ContinuousStep";
 import EditStep from "./components/EditStep";
 import ExportStep from "./components/ExportStep";
 import FrameSelectStep from "./components/FrameSelectStep";
@@ -56,6 +57,9 @@ export default function App() {
         )}
 
         {state.step === 3 && state.sessionId && <ExportStep sessionId={state.sessionId} />}
+        {state.step === 3 && state.sessionId && state.file && state.metadata && (
+          <ContinuousStep sessionId={state.sessionId} file={state.file} metadata={state.metadata} />
+        )}
       </main>
     </>
   );
