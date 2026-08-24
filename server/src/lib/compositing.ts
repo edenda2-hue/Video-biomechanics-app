@@ -28,6 +28,46 @@ export interface FreezeSequenceOptions {
   style?: "wipe" | "dissolve";
   /** Normalized [0,1] vertical extent of the person, required for "wipe". */
   verticalBounds?: { top: number; bottom: number };
+  /** Anatomy Keyframes mode: when set, zeroes the mask around the head (see excludeHeadFromMask) so the real head/face always shows through, only the body swaps to anatomy. */
+  excludeHeadPose?: PoseKeypoint[];
+}
+
+/**
+ * Zeroes a circular region of a raw greyscale mask buffer around the head,
+ * in place, so downstream compositing (`m = maskBuf[p]/255 * alpha`) always
+ * leaves that area as the literal original pixels regardless of anatomy
+ * content — "Anatomy Keyframes" mode swaps the body but keeps the person's
+ * real head showing. Falls back to a fraction of the frame height when the
+ * neck isn't confidently detected (no head-to-neck distance to size the
+ * circle from); no-ops entirely if the head itself isn't confidently
+ * detected. Mutates and returns the same buffer (not a copy) — callers
+ * that need the original mask preserved should pass in a copy.
+ */
+export function excludeHeadFromMask<T extends Uint8Array>(maskBuf: T, width: number, height: number, pose: PoseKeypoint[]): T {
+  const head = pose.find((k) => k.part === "head" && k.confidence >= 0.3);
+  if (!head) return maskBuf;
+  const neck = pose.find((k) => k.part === "neck" && k.confidence >= 0.3);
+
+  const cx = head.x * width;
+  const cy = head.y * height;
+  const radius = neck
+    ? Math.hypot((neck.x - head.x) * width, (neck.y - head.y) * height) * 1.4
+    : height * 0.09;
+
+  const rSq = radius * radius;
+  const minY = Math.max(0, Math.floor(cy - radius));
+  const maxY = Math.min(height - 1, Math.ceil(cy + radius));
+  const minX = Math.max(0, Math.floor(cx - radius));
+  const maxX = Math.min(width - 1, Math.ceil(cx + radius));
+  for (let y = minY; y <= maxY; y++) {
+    const dy = y - cy;
+    const rowStart = y * width;
+    for (let x = minX; x <= maxX; x++) {
+      const dx = x - cx;
+      if (dx * dx + dy * dy <= rSq) maskBuf[rowStart + x] = 0;
+    }
+  }
+  return maskBuf;
 }
 
 /**
@@ -52,7 +92,8 @@ export async function buildFreezeSequence(
 
   const originalBuf = await sharp(originalFramePath).ensureAlpha().raw().toBuffer();
   const anatomyBuf = await sharp(anatomyImagePath).resize(width, height).ensureAlpha().raw().toBuffer();
-  const maskBuf = await sharp(maskPath).resize(width, height).greyscale().raw().toBuffer(); // 1 channel, 0-255
+  let maskBuf = await sharp(maskPath).resize(width, height).greyscale().raw().toBuffer(); // 1 channel, 0-255
+  if (opts.excludeHeadPose) maskBuf = excludeHeadFromMask(maskBuf, width, height, opts.excludeHeadPose);
 
   const inFrames = Math.max(1, Math.round(fps * transitionInSec));
   const holdFrames = Math.max(1, Math.round(fps * holdSec));

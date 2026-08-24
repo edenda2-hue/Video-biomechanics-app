@@ -423,6 +423,15 @@ export default function EditStep({
         to change.
       </p>
 
+      {phase !== "preparing-frame" && (
+        <p className="muted" style={{ marginBottom: 12 }}>
+          <a href={frameUrl} download={`frame-${freezeSec.toFixed(2)}s.png`}>
+            Download this exact frame
+          </a>{" "}
+          — feed it into ChatGPT/Sora yourself for the most precise anatomy image, then upload the result below.
+        </p>
+      )}
+
       {(phase === "preparing-frame" || phase === "aligning") && (
         <div className="spinner-line">
           <span className="dot" /> {phase === "preparing-frame" ? "Analyzing the frame…" : "Aligning your image…"}

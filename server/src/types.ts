@@ -71,6 +71,29 @@ export interface LabelPlacement {
   leaderPath: { x: number; y: number }[];
 }
 
+/**
+ * One point in "Anatomy Keyframes" mode (server/src/routes/keyframes.ts):
+ * a specific timestamp whose frame is replaced by an anatomy image for
+ * `holdDurationSec`, with the head excluded from the swap (the real
+ * person's head/face always shows through) so the result stays
+ * identifiable while the body underneath is anatomical. You extract and
+ * download the exact frame, generate a precise anatomy image for it
+ * externally (ChatGPT/Sora/etc.), then upload it back — the same
+ * external-generation workflow as the single-freeze flow, just applied to
+ * as many timestamps as you choose instead of only one.
+ */
+export interface Keyframe {
+  id: string;
+  timeSec: number;
+  framePath?: string;
+  pose?: PoseKeypoint[];
+  maskPath?: string;
+  anatomyImagePath?: string;
+  holdDurationSec: number;
+  transitionInSec: number;
+  transitionOutSec: number;
+}
+
 export interface Session {
   id: string;
   createdAt: number;
@@ -83,6 +106,8 @@ export interface Session {
   /** Export trims the source video to [trimStartSec, trimEndSec] before splicing in the freeze. */
   trimStartSec: number;
   trimEndSec?: number;
+  /** Anatomy Keyframes mode: zero or more freeze points, sorted by timeSec at export time. */
+  keyframes: Keyframe[];
   /**
    * Continuous mode: the anatomy figure moves through this whole range
    * (instead of a single freeze) via server/src/lib/continuousComposite.ts.

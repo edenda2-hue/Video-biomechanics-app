@@ -193,6 +193,99 @@ export async function assembleFinalVideo(opts: AssembleOptions, onProgress?: (fr
   }
 }
 
+export interface MultiFreezeKeyframeSegment {
+  timeSec: number;
+  /** Encoded freeze segment for this keyframe (from buildFreezeSequence + encodeImageSequence). */
+  segmentPath: string;
+  holdDurationSec: number;
+}
+
+export interface AssembleMultiFreezeOptions {
+  originalVideoPath: string;
+  /** Sorted ascending by timeSec; each must fall within [trimStartSec, trimEndSec]. */
+  keyframes: MultiFreezeKeyframeSegment[];
+  trimStartSec: number;
+  trimEndSec: number;
+  metadata: VideoMetadata;
+  outPath: string;
+}
+
+/**
+ * "Anatomy Keyframes" mode's assembly: generalizes assembleFinalVideo's
+ * single-splice pattern to N freeze points. Original footage plays
+ * between/around every keyframe; each keyframe's freeze segment is spliced
+ * in at its own timestamp, audio silenced only for that keyframe's own
+ * hold duration and resuming the original track immediately after (same
+ * audio-sync principle as the single-freeze flow, just repeated per
+ * keyframe).
+ */
+export async function assembleMultiFreezeVideo(opts: AssembleMultiFreezeOptions, onProgress?: (fraction: number) => void) {
+  const { originalVideoPath, keyframes, trimStartSec, trimEndSec, metadata, outPath } = opts;
+  if (keyframes.length === 0) throw new Error("assembleMultiFreezeVideo requires at least one keyframe");
+  const bitrate = estimateBitrate(metadata);
+
+  const args = ["-i", originalVideoPath];
+  keyframes.forEach((kf) => args.push("-i", kf.segmentPath));
+
+  const vFilters: string[] = [];
+  const vLabels: string[] = [];
+  let cursor = trimStartSec;
+  keyframes.forEach((kf, i) => {
+    vFilters.push(`[0:v]trim=${cursor}:${kf.timeSec},setpts=PTS-STARTPTS[vo${i}]`);
+    vLabels.push(`[vo${i}]`);
+    vFilters.push(`[${i + 1}:v]setpts=PTS-STARTPTS[vf${i}]`);
+    vLabels.push(`[vf${i}]`);
+    cursor = kf.timeSec;
+  });
+  vFilters.push(`[0:v]trim=${cursor}:${trimEndSec},setpts=PTS-STARTPTS[voLast]`);
+  vLabels.push(`[voLast]`);
+  vFilters.push(`${vLabels.join("")}concat=n=${vLabels.length}:v=1:a=0[vout]`);
+
+  const filters = [...vFilters];
+  if (metadata.hasAudio) {
+    const aFilters: string[] = [];
+    const aLabels: string[] = [];
+    cursor = trimStartSec;
+    keyframes.forEach((kf, i) => {
+      aFilters.push(`[0:a]atrim=${cursor}:${kf.timeSec},asetpts=PTS-STARTPTS[ao${i}]`);
+      aLabels.push(`[ao${i}]`);
+      aFilters.push(`anullsrc=r=48000:cl=stereo:d=${kf.holdDurationSec}[as${i}]`);
+      aLabels.push(`[as${i}]`);
+      cursor = kf.timeSec;
+    });
+    aFilters.push(`[0:a]atrim=${cursor}:${trimEndSec},asetpts=PTS-STARTPTS[aoLast]`);
+    aLabels.push(`[aoLast]`);
+    aFilters.push(`${aLabels.join("")}concat=n=${aLabels.length}:v=0:a=1[aout]`);
+    filters.push(...aFilters);
+  }
+
+  args.push(
+    "-filter_complex",
+    filters.join(";"),
+    "-map",
+    "[vout]",
+    ...(metadata.hasAudio ? ["-map", "[aout]"] : ["-an"]),
+    "-r",
+    String(metadata.fps),
+    "-c:v",
+    "libx264",
+    "-b:v",
+    bitrate,
+    "-pix_fmt",
+    "yuv420p",
+    ...(metadata.hasAudio ? ["-c:a", "aac", "-b:a", "192k"] : []),
+    outPath,
+  );
+
+  const totalHold = keyframes.reduce((sum, kf) => sum + kf.holdDurationSec, 0);
+  const expectedFrames = Math.round((trimEndSec - trimStartSec + totalHold) * metadata.fps);
+  if (onProgress) {
+    await ffmpegWithProgress(args, expectedFrames, onProgress);
+  } else {
+    await ffmpeg(args);
+  }
+}
+
 export interface AssembleContinuousOptions {
   originalVideoPath: string;
   /** Encoded video covering exactly [startSec, endSec] of output content (from buildContinuousSequence + encodeImageSequence). */

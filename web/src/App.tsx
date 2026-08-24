@@ -24,6 +24,23 @@ const CONTINUOUS_LABELS = ["Upload", "Mode", "Continuous"];
 
 export default function App() {
   const [state, setState] = useState<WizardState>({ step: 0 });
+  // Every step forward pushes the previous state here first, so "Back" can
+  // restore it exactly (including sessionId/file/mode) rather than just
+  // decrementing a step counter and losing branch-specific fields.
+  const [history, setHistory] = useState<WizardState[]>([]);
+
+  function advance(next: WizardState) {
+    setHistory((h) => [...h, state]);
+    setState(next);
+  }
+
+  function goBack() {
+    setHistory((h) => {
+      if (h.length === 0) return h;
+      setState(h[h.length - 1]);
+      return h.slice(0, -1);
+    });
+  }
 
   return (
     <>
@@ -32,9 +49,16 @@ export default function App() {
         <p>Real movement → anatomy → muscle function → biomechanics. The original video is always the source of truth.</p>
       </header>
       <main className="app-body">
-        <Stepper current={state.step} labels={state.mode === "continuous" ? CONTINUOUS_LABELS : FREEZE_LABELS} />
+        <div className="row" style={{ marginBottom: 12, alignItems: "center" }}>
+          <Stepper current={state.step} labels={state.mode === "continuous" ? CONTINUOUS_LABELS : FREEZE_LABELS} />
+          {history.length > 0 && (
+            <button className="secondary" onClick={goBack}>
+              ← Back
+            </button>
+          )}
+        </div>
 
-        {state.step === 0 && <UploadStep onUploaded={(sessionId, metadata, file) => setState({ step: 1, sessionId, metadata, file })} />}
+        {state.step === 0 && <UploadStep onUploaded={(sessionId, metadata, file) => advance({ step: 1, sessionId, metadata, file })} />}
 
         {state.step === 1 && (
           <div className="card">
@@ -49,7 +73,7 @@ export default function App() {
                   The anatomy figure moves through the whole exercise — the person is never frozen. Upload one or more anatomy
                   reference images (different poses); the app matches and bends the closest one to every frame.
                 </p>
-                <button onClick={() => setState((s) => ({ ...s, step: 2, mode: "continuous" }))}>Continuous motion (experimental)</button>
+                <button onClick={() => advance({ ...state, step: 2, mode: "continuous" })}>Continuous motion (experimental)</button>
               </div>
               <div className="card" style={{ flex: 1, margin: 0 }}>
                 <h3>Single freeze point</h3>
@@ -57,7 +81,7 @@ export default function App() {
                   Pick one moment; the video freezes there, the anatomy figure appears, holds, then the original body returns and the
                   video resumes.
                 </p>
-                <button className="secondary" onClick={() => setState((s) => ({ ...s, step: 2, mode: "freeze" }))}>
+                <button className="secondary" onClick={() => advance({ ...state, step: 2, mode: "freeze" })}>
                   Single freeze point
                 </button>
               </div>
@@ -74,7 +98,7 @@ export default function App() {
             sessionId={state.sessionId}
             file={state.file}
             metadata={state.metadata}
-            onConfirmed={(freezeSec, frameUrl) => setState((s) => ({ ...s, step: 3, freezeSec, frameUrl }))}
+            onConfirmed={(freezeSec, frameUrl) => advance({ ...state, step: 3, freezeSec, frameUrl })}
           />
         )}
 
@@ -85,7 +109,7 @@ export default function App() {
             initialFrameUrl={state.frameUrl}
             initialFreezeSec={state.freezeSec}
             videoDurationSec={state.metadata.durationSec}
-            onContinue={() => setState((s) => ({ ...s, step: 4 }))}
+            onContinue={() => advance({ ...state, step: 4 })}
           />
         )}
 

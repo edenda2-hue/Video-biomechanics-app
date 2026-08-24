@@ -22,6 +22,7 @@ export async function createSession(originalVideoPath: string): Promise<Session>
     muscles: [],
     labels: [],
     attempts: 0,
+    keyframes: [],
   };
   sessions.set(id, session);
   return session;
