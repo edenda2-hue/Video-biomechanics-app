@@ -21,23 +21,31 @@ export interface BoneSegment {
   overlapFactor: number;
   /** Paint order: later entries draw on top. */
   order: number;
+  /**
+   * Generous upper bound on this bone's own length relative to the torso's
+   * (neck-pelvis) length in the *same* frame — real proportions run well
+   * under this (a hand is usually ~0.25-0.3x torso length, not 0.5x), the
+   * margin is deliberate so only wildly implausible detections get caught.
+   * `undefined` for "torso" itself (nothing to compare it against).
+   */
+  maxTorsoRatio?: number;
 }
 
 export const BONE_SEGMENTS: BoneSegment[] = [
   { name: "torso", proximal: "neck", distal: "pelvis", widthFactor: 0.55, overlapFactor: 0.35, order: 0 },
-  { name: "head", proximal: "neck", distal: "head", widthFactor: 0.9, overlapFactor: 0.5, order: 5 },
-  { name: "left_upper_arm", proximal: "left_shoulder", distal: "left_elbow", widthFactor: 0.32, overlapFactor: 0.3, order: 1 },
-  { name: "right_upper_arm", proximal: "right_shoulder", distal: "right_elbow", widthFactor: 0.32, overlapFactor: 0.3, order: 1 },
-  { name: "left_forearm", proximal: "left_elbow", distal: "left_wrist", widthFactor: 0.28, overlapFactor: 0.3, order: 2 },
-  { name: "right_forearm", proximal: "right_elbow", distal: "right_wrist", widthFactor: 0.28, overlapFactor: 0.3, order: 2 },
-  { name: "left_hand", proximal: "left_wrist", distal: "left_hand", widthFactor: 0.5, overlapFactor: 0.4, order: 3 },
-  { name: "right_hand", proximal: "right_wrist", distal: "right_hand", widthFactor: 0.5, overlapFactor: 0.4, order: 3 },
-  { name: "left_thigh", proximal: "left_hip", distal: "left_knee", widthFactor: 0.34, overlapFactor: 0.3, order: 1 },
-  { name: "right_thigh", proximal: "right_hip", distal: "right_knee", widthFactor: 0.34, overlapFactor: 0.3, order: 1 },
-  { name: "left_shin", proximal: "left_knee", distal: "left_ankle", widthFactor: 0.28, overlapFactor: 0.3, order: 2 },
-  { name: "right_shin", proximal: "right_knee", distal: "right_ankle", widthFactor: 0.28, overlapFactor: 0.3, order: 2 },
-  { name: "left_foot", proximal: "left_ankle", distal: "left_foot", widthFactor: 0.4, overlapFactor: 0.5, order: 3 },
-  { name: "right_foot", proximal: "right_ankle", distal: "right_foot", widthFactor: 0.4, overlapFactor: 0.5, order: 3 },
+  { name: "head", proximal: "neck", distal: "head", widthFactor: 0.9, overlapFactor: 0.5, order: 5, maxTorsoRatio: 0.9 },
+  { name: "left_upper_arm", proximal: "left_shoulder", distal: "left_elbow", widthFactor: 0.32, overlapFactor: 0.3, order: 1, maxTorsoRatio: 1.0 },
+  { name: "right_upper_arm", proximal: "right_shoulder", distal: "right_elbow", widthFactor: 0.32, overlapFactor: 0.3, order: 1, maxTorsoRatio: 1.0 },
+  { name: "left_forearm", proximal: "left_elbow", distal: "left_wrist", widthFactor: 0.28, overlapFactor: 0.3, order: 2, maxTorsoRatio: 0.9 },
+  { name: "right_forearm", proximal: "right_elbow", distal: "right_wrist", widthFactor: 0.28, overlapFactor: 0.3, order: 2, maxTorsoRatio: 0.9 },
+  { name: "left_hand", proximal: "left_wrist", distal: "left_hand", widthFactor: 0.5, overlapFactor: 0.4, order: 3, maxTorsoRatio: 0.5 },
+  { name: "right_hand", proximal: "right_wrist", distal: "right_hand", widthFactor: 0.5, overlapFactor: 0.4, order: 3, maxTorsoRatio: 0.5 },
+  { name: "left_thigh", proximal: "left_hip", distal: "left_knee", widthFactor: 0.34, overlapFactor: 0.3, order: 1, maxTorsoRatio: 1.3 },
+  { name: "right_thigh", proximal: "right_hip", distal: "right_knee", widthFactor: 0.34, overlapFactor: 0.3, order: 1, maxTorsoRatio: 1.3 },
+  { name: "left_shin", proximal: "left_knee", distal: "left_ankle", widthFactor: 0.28, overlapFactor: 0.3, order: 2, maxTorsoRatio: 1.2 },
+  { name: "right_shin", proximal: "right_knee", distal: "right_ankle", widthFactor: 0.28, overlapFactor: 0.3, order: 2, maxTorsoRatio: 1.2 },
+  { name: "left_foot", proximal: "left_ankle", distal: "left_foot", widthFactor: 0.4, overlapFactor: 0.5, order: 3, maxTorsoRatio: 0.5 },
+  { name: "right_foot", proximal: "right_ankle", distal: "right_foot", widthFactor: 0.4, overlapFactor: 0.5, order: 3, maxTorsoRatio: 0.5 },
 ];
 
 export interface Point {
@@ -186,6 +194,28 @@ export function nearestPoseIndex(targetPose: PoseKeypoint[], references: PoseKey
  * (both joints, in both poses) are confidently detected. Segments that
  * can't be resolved are omitted; the caller should hold the previous
  * frame's transform for those rather than let the limb disappear.
+ *
+ * Confidence alone doesn't catch every bad keypoint: pose models rarely
+ * signal "I can't see this" with a low score when a joint is occluded (a
+ * hand gripping a barbell from behind a weight plate, say) — they tend to
+ * hallucinate a plausible-looking position at moderate-to-high confidence
+ * instead. The same applies to the *reference* anatomy image when it's a
+ * stylized/AI-generated illustration rather than a photo, which the pose
+ * model wasn't trained on. This was caught directly from a real export: an
+ * occluded hand produced a solid-color blob nowhere near the actual hand,
+ * sized nothing like a hand.
+ *
+ * An earlier version of this filter flagged segments whose ref->target
+ * *scale* was a statistical outlier relative to the others — that broke on
+ * a legitimate case (an overhead arm swing scales very differently from
+ * mostly-still legs in the same pose change) and was replaced with a more
+ * targeted check: a bone's own length *in the target frame*, compared
+ * against the torso's (neck-pelvis) length in that same frame via each
+ * segment's `maxTorsoRatio`. This doesn't care how the reference image or
+ * the rest of the body moved, only whether *this* bone's target length is
+ * anatomically plausible relative to *this* person's own visible size —
+ * generous margins (see BONE_SEGMENTS) so it only catches genuinely wild
+ * cases like a "hand" spanning half the torso, not normal proportions.
  */
 export function computeSegmentTransforms(
   refPose: PoseKeypoint[],
@@ -198,6 +228,13 @@ export function computeSegmentTransforms(
   const tgtByPart = new Map(tgtPose.map((k) => [k.part, k]));
   const out = new Map<string, AffineTransform>();
 
+  const tgtNeck = tgtByPart.get("neck");
+  const tgtPelvis = tgtByPart.get("pelvis");
+  const torsoLenTarget =
+    tgtNeck && tgtPelvis && tgtNeck.confidence >= minConfidence && tgtPelvis.confidence >= minConfidence
+      ? Math.hypot((tgtPelvis.x - tgtNeck.x) * tgtSize.width, (tgtPelvis.y - tgtNeck.y) * tgtSize.height)
+      : null;
+
   for (const seg of BONE_SEGMENTS) {
     const rA = refByPart.get(seg.proximal);
     const rB = refByPart.get(seg.distal);
@@ -207,9 +244,15 @@ export function computeSegmentTransforms(
     if (rA.confidence < minConfidence || rB.confidence < minConfidence) continue;
     if (tA.confidence < minConfidence || tB.confidence < minConfidence) continue;
 
+    if (seg.maxTorsoRatio && torsoLenTarget && torsoLenTarget > 0) {
+      const boneLenTarget = Math.hypot((tB.x - tA.x) * tgtSize.width, (tB.y - tA.y) * tgtSize.height);
+      if (boneLenTarget > torsoLenTarget * seg.maxTorsoRatio) continue;
+    }
+
     const transform = boneTransform(toPixel(rA, refSize), toPixel(rB, refSize), toPixel(tA, tgtSize), toPixel(tB, tgtSize));
     out.set(seg.name, transform);
   }
+
   return out;
 }
 

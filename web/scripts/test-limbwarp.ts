@@ -111,6 +111,13 @@ function close(a: number, b: number, eps = 1e-6) {
     right_ankle: [0.62, 0.82],
     left_wrist: [0.2, 0.3],
     right_wrist: [0.8, 0.3],
+    // The hand has to move with the wrist -- a hand keypoint left behind at
+    // its old position (as if the wrist could raise without the hand) is
+    // an anatomically impossible fixture, not a real pose a detector would
+    // ever produce, and now legitimately fails computeSegmentTransforms's
+    // torso-relative plausibility check (as it should).
+    left_hand: [0.18, 0.28],
+    right_hand: [0.82, 0.28],
   });
 
   const transforms = computeSegmentTransforms(refPose, squatPose, srcSize, dstSize);
@@ -121,6 +128,33 @@ function close(a: number, b: number, eps = 1e-6) {
   const mappedHip = applyTransform(thigh, hipRef);
   const expectedHipTgt = { x: 0.42 * dstSize.width, y: 0.58 * dstSize.height };
   assert(close(mappedHip.x, expectedHipTgt.x, 1e-3) && close(mappedHip.y, expectedHipTgt.y, 1e-3), "left_thigh transform maps the hip joint onto the squat target's hip position");
+}
+
+// --- computeSegmentTransforms: a confidently-detected but anatomically implausible
+// segment (e.g. a hand keypoint left far from its own wrist -- the kind of thing a
+// pose model can produce for an occluded joint without ever signaling low confidence)
+// gets dropped via the torso-relative maxTorsoRatio check, not rendered as a garbled patch ---
+{
+  const srcSize = { width: 400, height: 600 };
+  const dstSize = { width: 800, height: 500 };
+  const basePose: Record<BodyPart, [number, number]> = {
+    head: [0.5, 0.1], neck: [0.5, 0.18], left_shoulder: [0.4, 0.22], right_shoulder: [0.6, 0.22],
+    left_elbow: [0.32, 0.38], right_elbow: [0.68, 0.38], left_wrist: [0.28, 0.5], right_wrist: [0.72, 0.5],
+    left_hand: [0.27, 0.52], right_hand: [0.73, 0.52], spine: [0.5, 0.35], pelvis: [0.5, 0.5],
+    left_hip: [0.42, 0.5], right_hip: [0.58, 0.5], left_knee: [0.4, 0.68], right_knee: [0.6, 0.68],
+    left_ankle: [0.38, 0.86], right_ankle: [0.62, 0.86], left_foot: [0.37, 0.9], right_foot: [0.63, 0.9],
+  };
+  const toPose = (record: Record<BodyPart, [number, number]>, confidence = 0.9): PoseKeypoint[] =>
+    Object.entries(record).map(([part, [x, y]]) => ({ part: part as BodyPart, x, y, confidence }));
+
+  const refPose = toPose(basePose);
+  // Wrist raised (as if reaching up); hand left behind at its original position --
+  // confidently detected on both ends, but no real hand would be that far from its wrist.
+  const badHandPose = toPose({ ...basePose, left_wrist: [0.2, 0.3] });
+
+  const transforms = computeSegmentTransforms(refPose, badHandPose, srcSize, dstSize);
+  assert(!transforms.has("left_hand"), "an implausibly-long hand segment (left far from its raised wrist) is dropped despite high confidence on both ends");
+  assert(transforms.has("left_forearm") && transforms.has("torso") && transforms.has("right_hand"), "unrelated segments -- including the unaffected right hand -- still resolve normally");
 }
 
 // --- computeSegmentTransforms: a low-confidence joint drops that segment, not the whole pose ---

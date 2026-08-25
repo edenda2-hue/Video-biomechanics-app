@@ -723,6 +723,34 @@ change.
   and upload it back for that keyframe — a pose-matched reference image
   needs little to no per-limb bending in the first place, so there's no
   cross-joint content mismatch to hide.
+- **A confidently-wrong keypoint can produce a garbled patch, even using
+  the per-keyframe pose-matched workflow above.** Caught directly from a
+  real export (user-reported, screenshotted): a solid-color blob appeared
+  right where a hand should be, in a rep where that hand was gripping a
+  barbell from behind a weight plate — occluded in the source footage. Pose
+  models rarely signal "I can't see this" with a low confidence score for
+  an occluded joint; they tend to hallucinate a plausible-looking position
+  at moderate-to-high confidence instead, which passes the existing
+  confidence gate untouched. The same applies to the *reference* anatomy
+  image's own pose detection when it's a stylized/AI-generated illustration
+  the pose model wasn't trained on, not a photo. Either way, the resulting
+  transform can sample a completely unrelated region of the reference image
+  at an implausible scale. `computeSegmentTransforms` now checks each
+  resolved segment's bone length *in the target frame* against the torso's
+  (neck-pelvis) length in that same frame, via a generous `maxTorsoRatio`
+  per segment (e.g. a hand shouldn't span more than half the torso's own
+  length) — an earlier version of this check compared each segment's
+  ref->target *scale* to the others' instead, which sounded plausible but
+  broke on a real, legitimate case (an overhead arm swing legitimately
+  scales very differently from mostly-still legs in the same pose change),
+  caught by `web/scripts/test-limbwarp.ts` before it shipped. The
+  torso-relative length check doesn't care how the rest of the body or the
+  reference image moved, only whether this one bone's target length is
+  anatomically plausible relative to this person's own visible size, so it
+  doesn't share that failure mode — unit-tested with a dedicated case (a
+  hand confidently detected but left far from its own raised wrist).
+  Segments this rejects are routed through the same whole-image-fit
+  fallback unresolved segments already get.
 - **The offline chat mock has narrow language understanding** (English
   regex patterns only) — it's there so the mechanism is testable without an
   API key, not as a substitute for the real model. Add `OPENAI_API_KEY` for
