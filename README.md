@@ -529,34 +529,46 @@ The Metrics tab (memory graph) and Events tab (`Instance failed` entries)
 remain the fastest way to confirm whether memory is the limiting factor if
 exports ever fail again on a very large source video.
 
-## CPU contention during ffmpeg encoding
+## ffmpeg's own memory footprint
 
-After the memory upgrade, a real export got past compositing (the phase
-that was OOMing) and reached the encoding phase before failing with a 502
-again — a different symptom pointing at a different constraint: Standard
-is a single-vCPU plan, and ffmpeg encoding a real video can occupy that one
-core heavily enough that the Node process gets starved of the scheduling
-time it needs just to answer a trivial export-status poll. This is OS-level
-CPU contention between two separate processes (Node and ffmpeg), not
-anything happening on Node's own event loop — the native-compositing fix
-above doesn't touch it.
+After the Standard-plan upgrade, a real export got past compositing (the
+phase that had been OOMing at 512MB) and reached the encoding phase before
+failing with a 502 again. The first hypothesis was CPU contention (a
+single-vCPU plan, Node starved of scheduling time while ffmpeg saturates
+the one core) — `server/src/lib/ffmpeg.ts` spawning ffmpeg through
+`nice -n 10` and a much more generous client-side poll-failure tolerance
+(`web/src/hooks/useJobPolling.ts`, ~4s → ~48s) both target that, and both
+stayed in since they're harmless either way. **But the next attempt's
+Render Events entry showed `Ran out of memory (used over 2GB)`** — the
+same OOM symptom as before, just against the 4x larger ceiling, which
+rules out CPU contention as the (sole) explanation and points at ffmpeg's
+own encoding memory as a real, uncounted contributor: it runs as a
+separate OS process outside anything Node-side profiling or GC tuning
+touches, sharing the same container memory limit.
 
-`server/src/lib/ffmpeg.ts` now spawns ffmpeg through `nice -n 10` (checked
-once at startup via `spawnSync("nice", ["--version"])`, and skipped
-gracefully wherever `nice` isn't available, e.g. some Windows dev setups)
-so the kernel prefers giving CPU time to Node — which only needs brief
-bursts to answer a poll — over ffmpeg, which is happy to yield and resume,
-whenever the two contend for the same core.
-`web/src/hooks/useJobPolling.ts`'s failure tolerance was also raised from
-~4s to ~48s worth of consecutive failed polls, since a real encode can
-plausibly cause contention lasting that long and the UI shouldn't give up
-on a job that's still fine server-side. Both are reasoned fixes for a
-real, reproduced symptom, verified not to change any exported output
-(full smoke-test suite still passes) — whether they fully close the gap on
-a genuinely large real-world video, the way the Standard-plan upgrade
-concretely did for the memory issue, isn't something this sandbox can
-verify without the platform's own single-vCPU contention characteristics
-to test against.
+libx264 (this app's video codec) defaults to the `medium` preset, which
+trades memory for compression efficiency — more reference frames, a wider
+motion-estimation search range, multi-frame lookahead buffering — all
+scaling with resolution. Combined with this app's bitrate targets (up to
+40Mbps for high-resolution/frame-rate sources, deliberately generous for
+quality), that's a real, potentially large contributor independent of
+anything the earlier memory work addressed. All four `-c:v libx264` encode
+calls now pass `-preset veryfast`, which cuts that overhead substantially
+for a modest bitrate-efficiency cost (roughly 10-20% larger output for the
+same visual quality) — worth it here since none of these encodes are
+storage-constrained, only memory-constrained. Verified not to change
+correctness (full smoke-test suite still passes; pixel-diff thresholds are
+comfortably satisfied, just with slightly different exact values than the
+`medium`-preset baseline).
+
+Whether this fully closes the gap on the user's actual real-world video is
+still unconfirmed as of this writing — unlike the Standard-plan upgrade,
+which was concretely verified via Render's own Events tab, this is
+reasoned from how libx264's presets work, not measured against the
+platform's real memory ceiling. If `over 2GB` recurs even with this
+change, the next real lever is bitrate itself (`estimateBitrate` in
+`lib/ffmpeg.ts` currently targets 8-40Mbps) — a genuine quality tradeoff
+that should be a conscious choice with the user, not a silent change.
 
 ## Known limitations
 

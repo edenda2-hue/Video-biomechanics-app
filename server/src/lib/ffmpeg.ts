@@ -16,6 +16,17 @@ import type { VideoMetadata } from "../types.js";
 // dev setups) rather than failing every ffmpeg call.
 const NICE_AVAILABLE = spawnSync("nice", ["--version"]).error === undefined;
 
+// libx264's default preset ("medium") trades memory/CPU for compression
+// efficiency: more reference frames, a wider motion-estimation search
+// range, and multi-frame lookahead buffering — all of which scale with
+// resolution and can add up to a meaningful chunk of an encode's peak
+// memory on a real (not tiny test-fixture) video, independent of anything
+// on the Node side. "veryfast" cuts all of that down substantially for a
+// modest bitrate-efficiency cost (roughly 10-20% larger output for the
+// same quality at a given CRF/bitrate) — worth it here since none of this
+// app's encodes are bitrate- or storage-constrained, only memory-constrained.
+const ENCODE_PRESET = "veryfast";
+
 function spawnFfmpeg(args: string[]): ChildProcessWithoutNullStreams {
   return NICE_AVAILABLE ? spawn("nice", ["-n", "10", "ffmpeg", ...args]) : spawn("ffmpeg", args);
 }
@@ -147,7 +158,21 @@ export async function encodeImageSequence(
   outPath: string,
   progress?: { frameCount: number; onProgress: (fraction: number) => void },
 ) {
-  const args = ["-framerate", String(fps), "-i", seqGlobPattern, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "16", outPath];
+  const args = [
+    "-framerate",
+    String(fps),
+    "-i",
+    seqGlobPattern,
+    "-c:v",
+    "libx264",
+    "-preset",
+    ENCODE_PRESET,
+    "-pix_fmt",
+    "yuv420p",
+    "-crf",
+    "16",
+    outPath,
+  ];
   if (progress) {
     await ffmpegWithProgress(args, progress.frameCount, progress.onProgress);
   } else {
@@ -207,6 +232,8 @@ export async function assembleFinalVideo(opts: AssembleOptions, onProgress?: (fr
     String(metadata.fps),
     "-c:v",
     "libx264",
+    "-preset",
+    ENCODE_PRESET,
     "-b:v",
     bitrate,
     "-pix_fmt",
@@ -299,6 +326,8 @@ export async function assembleMultiFreezeVideo(opts: AssembleMultiFreezeOptions,
     String(metadata.fps),
     "-c:v",
     "libx264",
+    "-preset",
+    ENCODE_PRESET,
     "-b:v",
     bitrate,
     "-pix_fmt",
@@ -365,6 +394,8 @@ export async function assembleContinuousVideo(opts: AssembleContinuousOptions, o
     String(metadata.fps),
     "-c:v",
     "libx264",
+    "-preset",
+    ENCODE_PRESET,
     "-b:v",
     bitrate,
     "-pix_fmt",
