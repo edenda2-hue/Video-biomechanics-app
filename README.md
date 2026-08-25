@@ -515,6 +515,60 @@ A separate screenshot check with a tall, differently-proportioned test image
 center-fit placement itself: letterboxed and centered correctly, unwarped,
 right-side up, with no automatic transform applied beyond that.
 
+### A real server-side bug this redesign exposed: gaps rendered black instead of falling back to the original footage
+
+Reported directly by the user with a real exported frame: even after
+carefully aligning the anatomy image, the export showed something visibly
+wrong wherever the alignment didn't perfectly match the person's outline.
+Root cause was in `server/src/lib/compositing.ts`'s `blendFrame` and
+`blendFrameSweep`, and predates round 2 — it just took round 2 to make it
+consequential. Both functions compute the final per-pixel alpha as
+`maskBuf[p] * transitionAlpha`, which **completely discards the anatomy
+image's own alpha channel** rather than factoring it in. That's invisible
+as long as the anatomy image is fully opaque everywhere the person mask
+says "person" — which the old per-limb puppet warp effectively guaranteed
+by construction (its capsule-clipped segments roughly tiled the whole body)
+and which `keyframes-smoke.mjs`'s test fixture (a fully opaque synthetic
+ellipse) also happens to always be, so the existing test suite could never
+have caught this. But the manual touch-alignment flow uploads a PNG that's
+opaque *only* where the user actually placed the image and transparent
+everywhere else on the canvas — so any part of the real person's mask
+silhouette the placement doesn't cover was compositing in literal black
+(a fresh HTML canvas's default transparent-pixel RGB) at full blend weight,
+instead of correctly falling back to the real original footage.
+
+Reproduced directly before fixing anything (`server/scripts/compositing-alpha-smoke.mjs`):
+a solid blue synthetic frame, a mask circle covering most of it, and an
+anatomy image opaque-red only in a small corner square and transparent
+everywhere else. A pixel inside the mask but outside the red square came
+back `(0, 0, 0)` — black — instead of the original `(0, 0, 255)` blue. Fixed
+by multiplying the anatomy buffer's own alpha into the blend weight
+(`(maskBuf[p] * alpha * anatomyBuf[p*4+3]) / 255`) instead of ignoring it;
+re-running the same script after the fix, the gap pixel came back the
+correct blue and the covered pixel still came back the correct red. Both
+existing full-pipeline smoke tests (`keyframes-smoke.mjs`,
+`continuous-smoke.mjs`) still pass unchanged — expected, since their
+fixtures are fully opaque and can't exercise this path either way.
+
+This fix is also what makes the user's own proposed direction work, without
+needing a different UI: "only the anatomical figure should dress onto the
+person, not the whole frame." With the anatomy image's alpha now respected,
+that's exactly what happens — anatomy content shows only where the user's
+placement is actually opaque, and every gap (including the space around an
+irregular, limbed body silhouette that a single rectangular placement can't
+perfectly cover) now correctly falls back to the real footage instead of
+showing black. The one thing this can't fix on its own: it only helps if
+the *uploaded* anatomy image itself has a meaningfully transparent
+background around the figure, or is scaled/rotated to closely match the
+body's own bounding shape — a plain fully-opaque rectangular photo will
+still composite as a rectangle within whatever area the user places it,
+just no longer bleed as garbage into a gap. `continuous-smoke.mjs` passing
+unchanged is also a reminder that continuous mode shares this exact code
+path and was quietly affected by the same bug too, in the case of a
+skeletal-puppet segment that fails to resolve (left transparent by
+`renderSkeletalPuppetFrameFromPoses`) — this fix benefits that mode as well,
+not just the manual-alignment flows.
+
 ## Alternate: AI-generated anatomy (not in the primary flow)
 
 The original OpenAI-based design — the app itself calls `images.edit` on

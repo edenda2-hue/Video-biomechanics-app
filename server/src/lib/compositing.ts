@@ -284,14 +284,32 @@ async function blendFrameSweep(
       const local = (threshold - metric) / feather + 0.5;
       const covered = smoothstep(local); // 1 = swept over (anatomy side), 0 = not yet (original side)
       const alpha = phase === "in" ? covered : 1 - covered;
-      anatomyWithAlpha[p * 4 + 3] = Math.round(maskBuf[p] * alpha);
+      // Factor in the anatomy image's OWN alpha (255 = opaque, 0 =
+      // transparent) — see blendFrame's doc comment for why this can't be
+      // dropped: it's what makes a gap in the user's manual placement fall
+      // back to the real footage instead of showing garbage/black.
+      anatomyWithAlpha[p * 4 + 3] = Math.round((maskBuf[p] * alpha * anatomyBuf[p * 4 + 3]) / 255);
     }
     if (y % ROWS_PER_CHUNK === ROWS_PER_CHUNK - 1) await yieldToEventLoop();
   }
   return compositeOver(originalBuf, anatomyWithAlpha, width, height);
 }
 
-/** result = original * (1 - mask*alpha) + anatomy * (mask*alpha), computed via native alpha compositing. */
+/**
+ * result = original * (1 - mask*alpha*anatomyAlpha) + anatomy * (mask*alpha*anatomyAlpha),
+ * computed via native alpha compositing. Multiplying in the anatomy
+ * buffer's own alpha (not just overwriting it with mask*alpha) matters as
+ * soon as the anatomy image isn't fully opaque everywhere the mask says
+ * "person" — which is now the normal case for the manual touch-alignment
+ * flow (AnatomyAligner.tsx): the uploaded PNG is only opaque where the user
+ * actually placed it and transparent everywhere else on the canvas. Without
+ * this, any part of the mask silhouette outside that placement rendered as
+ * literal black (the canvas's default transparent-pixel RGB) blended in at
+ * full weight instead of falling back to the real original footage — caught
+ * directly via scripts/compositing-alpha-smoke.mjs, which was previously
+ * unable to catch it since keyframes-smoke.mjs's fixture anatomy image is
+ * always fully opaque (no gap for the bug to manifest in).
+ */
 export async function blendFrame(
   originalBuf: Buffer,
   anatomyBuf: Buffer,
@@ -304,7 +322,7 @@ export async function blendFrame(
   const total = width * height;
   const PIXELS_PER_CHUNK = 500_000;
   for (let p = 0; p < total; p++) {
-    anatomyWithAlpha[p * 4 + 3] = Math.round(maskBuf[p] * alpha);
+    anatomyWithAlpha[p * 4 + 3] = Math.round((maskBuf[p] * alpha * anatomyBuf[p * 4 + 3]) / 255);
     if (p % PIXELS_PER_CHUNK === PIXELS_PER_CHUNK - 1) await yieldToEventLoop();
   }
   return compositeOver(originalBuf, anatomyWithAlpha, width, height);
