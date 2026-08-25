@@ -1,11 +1,16 @@
 import { useCallback, useRef, useState } from "react";
 import type { ExportJobStatus } from "../api/client";
 
-// Tolerates a run of transient failures before giving up — a single failed
-// poll (e.g. a platform proxy briefly returning 502 while the server's
-// event loop is busy compositing a large frame) shouldn't make the UI
-// abandon a job that's actually still running fine server-side.
-const MAX_CONSECUTIVE_FAILURES = 5;
+// Tolerates a long run of transient failures before giving up — a failed
+// poll (e.g. a platform proxy returning 502 while a CPU-bound ffmpeg
+// encode is starving the single shared CPU core the Node process needs to
+// even answer a trivial status request) shouldn't make the UI abandon a
+// job that's actually still running fine server-side. A real ffmpeg
+// encode of a real video can plausibly cause this kind of contention for
+// tens of seconds at a time on a single-vCPU instance, so this is
+// deliberately generous (~48s at the default 800ms interval) rather than
+// tuned to what a tiny synthetic test video needs.
+const MAX_CONSECUTIVE_FAILURES = 60;
 
 /**
  * Shared polling logic for the three export flows (single-freeze,

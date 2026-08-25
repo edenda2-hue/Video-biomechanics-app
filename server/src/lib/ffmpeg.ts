@@ -1,5 +1,24 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { VideoMetadata } from "../types.js";
+
+// On a single-vCPU instance (e.g. Render's Standard plan — 1 CPU), ffmpeg
+// encoding a real video can occupy that one core heavily enough that the
+// Node process gets starved of scheduling time it needs just to answer a
+// trivial export-status poll, producing the same "job is fine, but the
+// platform's proxy times out the poll" symptom the compositing loop used
+// to cause before it was moved to native/non-blocking work — except this
+// time it's OS-level CPU scheduling between two separate processes, not
+// anything happening on Node's own event loop. `nice` lowers ffmpeg's
+// scheduling priority so the kernel prefers giving CPU time to Node (which
+// needs only brief bursts) over ffmpeg (which is happy to yield and
+// resume) whenever they contend for the same core. Checked once at
+// startup and skipped gracefully wherever unavailable (e.g. some Windows
+// dev setups) rather than failing every ffmpeg call.
+const NICE_AVAILABLE = spawnSync("nice", ["--version"]).error === undefined;
+
+function spawnFfmpeg(args: string[]): ChildProcessWithoutNullStreams {
+  return NICE_AVAILABLE ? spawn("nice", ["-n", "10", "ffmpeg", ...args]) : spawn("ffmpeg", args);
+}
 
 function run(cmd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -17,7 +36,18 @@ function run(cmd: string, args: string[]): Promise<{ stdout: string; stderr: str
 }
 
 export function ffmpeg(args: string[]) {
-  return run("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", ...args]);
+  return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawnFfmpeg(["-y", "-hide_banner", "-loglevel", "error", ...args]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => (stdout += d.toString()));
+    child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`ffmpeg exited with code ${code}\n${stderr.slice(-4000)}`));
+    });
+  });
 }
 
 /**
@@ -29,7 +59,7 @@ export function ffmpeg(args: string[]) {
  */
 export function ffmpegWithProgress(args: string[], expectedFrames: number, onProgress: (fraction: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", "-stats", ...args]);
+    const child = spawnFfmpeg(["-y", "-hide_banner", "-loglevel", "error", "-stats", ...args]);
     let stderr = "";
     let buffer = "";
     const onData = (d: Buffer) => {

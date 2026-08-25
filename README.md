@@ -529,6 +529,35 @@ The Metrics tab (memory graph) and Events tab (`Instance failed` entries)
 remain the fastest way to confirm whether memory is the limiting factor if
 exports ever fail again on a very large source video.
 
+## CPU contention during ffmpeg encoding
+
+After the memory upgrade, a real export got past compositing (the phase
+that was OOMing) and reached the encoding phase before failing with a 502
+again — a different symptom pointing at a different constraint: Standard
+is a single-vCPU plan, and ffmpeg encoding a real video can occupy that one
+core heavily enough that the Node process gets starved of the scheduling
+time it needs just to answer a trivial export-status poll. This is OS-level
+CPU contention between two separate processes (Node and ffmpeg), not
+anything happening on Node's own event loop — the native-compositing fix
+above doesn't touch it.
+
+`server/src/lib/ffmpeg.ts` now spawns ffmpeg through `nice -n 10` (checked
+once at startup via `spawnSync("nice", ["--version"])`, and skipped
+gracefully wherever `nice` isn't available, e.g. some Windows dev setups)
+so the kernel prefers giving CPU time to Node — which only needs brief
+bursts to answer a poll — over ffmpeg, which is happy to yield and resume,
+whenever the two contend for the same core.
+`web/src/hooks/useJobPolling.ts`'s failure tolerance was also raised from
+~4s to ~48s worth of consecutive failed polls, since a real encode can
+plausibly cause contention lasting that long and the UI shouldn't give up
+on a job that's still fine server-side. Both are reasoned fixes for a
+real, reproduced symptom, verified not to change any exported output
+(full smoke-test suite still passes) — whether they fully close the gap on
+a genuinely large real-world video, the way the Standard-plan upgrade
+concretely did for the memory issue, isn't something this sandbox can
+verify without the platform's own single-vCPU contention characteristics
+to test against.
+
 ## Known limitations
 
 - **Alignment quality depends on pose detection succeeding on your uploaded
