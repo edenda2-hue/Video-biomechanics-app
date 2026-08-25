@@ -512,6 +512,12 @@ export default function EditStep({
               accept="image/*"
               onChange={(e) => {
                 const file = e.target.files?.[0];
+                // See KeyframesStep.tsx's identical fix: browsers fire no
+                // `change` event at all when the same file is re-selected
+                // through the native picker, so clearing the input's value
+                // here is what makes re-picking the same file actually
+                // trigger a fresh fit instead of silently doing nothing.
+                e.target.value = "";
                 if (file) handleAnatomyFile(file);
               }}
             />

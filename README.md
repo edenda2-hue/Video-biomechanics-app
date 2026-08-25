@@ -785,6 +785,20 @@ change.
   unambiguous in a screenshot — a full keyframes export was driven
   end-to-end through a real browser and confirmed the overlay now reaches
   the hands, with the shoes staying a clean, un-ghosted boundary.
+- **Re-selecting the same anatomy image file did nothing.** Both anatomy
+  file inputs (`EditStep.tsx`, `KeyframesStep.tsx`) never reset their
+  `value` after reading a file. Browsers fire *no* `change` event at all
+  when the exact same file is re-selected through the native picker (the
+  input's value string hasn't changed from the browser's point of view),
+  so re-picking the identical anatomy image — the natural way to force a
+  fresh fit after a code update, and something users are directly told to
+  do when verifying a fix — silently did nothing: no request, no
+  recomputation, the on-screen result staying byte-identical to before.
+  This directly undermined confidence in the segmentation-model fix above,
+  since the natural way to check whether it helped looked like it hadn't
+  been applied at all. Both inputs now clear `e.target.value` in their
+  `onChange` handler, so re-selecting the same file always fires the
+  handler again.
 - **The offline chat mock has narrow language understanding** (English
   regex patterns only) — it's there so the mechanism is testable without an
   API key, not as a substitute for the real model. Add `OPENAI_API_KEY` for

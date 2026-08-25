@@ -245,6 +245,13 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
                       disabled={kf.busy}
                       onChange={(e) => {
                         const f = e.target.files?.[0];
+                        // Browsers fire no `change` event at all if you
+                        // re-select the exact same file through the native
+                        // picker (the input's value string hasn't changed)
+                        // — clearing it here means re-picking the same file
+                        // to force a fresh fit (e.g. after a code update)
+                        // always works instead of silently doing nothing.
+                        e.target.value = "";
                         if (f) handleAnatomyFile(kf, f);
                       }}
                     />
