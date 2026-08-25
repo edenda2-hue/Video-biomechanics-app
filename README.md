@@ -799,6 +799,28 @@ change.
   been applied at all. Both inputs now clear `e.target.value` in their
   `onChange` handler, so re-selecting the same file always fires the
   handler again.
+- **Anatomy Keyframes mode had no way to manually correct an imperfect
+  automatic fit.** When a specific joint is hard to place with confidence —
+  a hand gripping a barbell, occluded exactly like the case that motivated
+  the plausibility check above — some number of segments will always fall
+  back to the whole-image fit for that keyframe, no matter how good
+  automatic pose/segment detection gets; that's a real limit of what's
+  visible in a 2D photo, not a bug to keep chasing. The single-freeze Edit
+  screen already has a manual escape hatch for exactly this (offset/scale/
+  rotation nudge sliders, plus the AI chat), but Anatomy Keyframes mode had
+  none at all — every keyframe was 100% dependent on automatic detection
+  getting it right, with no way for the user to fix it themselves.
+  `KeyframesStep.tsx` now has the same nudge sliders per keyframe, mirroring
+  `EditStep.tsx`'s `rewarpAndUpload`/`scheduleRewarp` pattern: each
+  keyframe's raw anatomy image and its own detected pose are kept in a
+  `Map` (keyed by keyframe id, since — unlike the single-freeze flow —
+  there can be several independent anatomy images open at once), so
+  dragging a slider re-runs `fitAnatomyToPose` with the nudge applied and
+  re-uploads, without needing the file re-picked. Verified end-to-end
+  (Playwright): the sliders render with the expected range (derived from
+  each keyframe's own frame size), and dragging one triggers exactly one
+  new anatomy upload after the debounce, confirming the fit actually
+  recomputes rather than just moving a slider that does nothing.
 - **The offline chat mock has narrow language understanding** (English
   regex patterns only) — it's there so the mechanism is testable without an
   API key, not as a substitute for the real model. Add `OPENAI_API_KEY` for

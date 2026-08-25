@@ -9,7 +9,7 @@ import {
   uploadKeyframeAnatomy,
   type ExportJobStatus,
 } from "../api/client";
-import { fitAnatomyToPose, type AnatomyFitInfo } from "../cv/anatomyFit";
+import { DEFAULT_MANUAL_ADJUST, fitAnatomyToPose, type AnatomyFitInfo, type ManualAdjust } from "../cv/anatomyFit";
 import { useJobPolling } from "../hooks/useJobPolling";
 import { detectPose } from "../cv/pose";
 import { segmentPerson } from "../cv/segmentation";
@@ -40,6 +40,7 @@ interface KeyframeEntry {
   frameSize: { width: number; height: number } | null;
   anatomyImageUrl: string | null;
   matchInfo: AnatomyFitInfo | null;
+  adjust: ManualAdjust;
   holdDurationSec: number;
   transitionInSec: number;
   transitionOutSec: number;
@@ -65,6 +66,14 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
   const [addingKeyframe, setAddingKeyframe] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const { status, setStatus, error, setError, start: startPolling, stop: stopPolling } = useJobPolling(getKeyframesExportStatus);
+  // Per-keyframe raw anatomy image + its own detected pose, kept around so
+  // the manual nudge sliders (offset/scale/rotate) can re-run the fit
+  // without needing the file re-uploaded — mirrors EditStep.tsx's
+  // rawAnatomyImgRef/rawAnatomySizeRef/uploadedPoseRef, just keyed per
+  // keyframe since there can be several independent anatomy images here.
+  const rawAnatomyRef = useRef<Map<string, { img: HTMLImageElement; rawSize: { width: number; height: number }; rawPose: PoseKeypoint[] }>>(
+    new Map(),
+  );
 
   useEffect(() => {
     const url = URL.createObjectURL(file);
@@ -101,6 +110,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
             frameSize,
             anatomyImageUrl: null,
             matchInfo: null,
+            adjust: DEFAULT_MANUAL_ADJUST,
             holdDurationSec: 3,
             transitionInSec: 0.4,
             transitionOutSec: 0.4,
@@ -123,20 +133,55 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
 
   async function handleAnatomyFile(kf: KeyframeEntry, file: File) {
     if (!kf.framePose || !kf.frameSize) return;
-    patchKeyframe(kf.id, { busy: true, error: null });
+    patchKeyframe(kf.id, { busy: true, error: null, adjust: DEFAULT_MANUAL_ADJUST });
     try {
       const url = URL.createObjectURL(file);
       const img = await loadImage(url);
       const rawSize = { width: img.naturalWidth, height: img.naturalHeight };
       const rawPose = await detectPose(img).catch(() => [] as PoseKeypoint[]);
+      rawAnatomyRef.current.set(kf.id, { img, rawSize, rawPose });
 
-      const { canvas, info } = fitAnatomyToPose(img, rawPose, rawSize, kf.framePose, kf.frameSize);
-      const { imageUrl } = await uploadKeyframeAnatomy(sessionId, kf.id, canvas.toDataURL("image/png"));
-
-      patchKeyframe(kf.id, { anatomyImageUrl: `${imageUrl}`, matchInfo: info, busy: false });
+      await rewarpAndUpload(kf.id, kf.framePose, kf.frameSize, DEFAULT_MANUAL_ADJUST);
+      patchKeyframe(kf.id, { busy: false });
     } catch (e) {
       patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
     }
+  }
+
+  /**
+   * Re-runs the fit for one keyframe's already-uploaded anatomy image
+   * against the given manual nudge, then re-uploads the result. Mirrors
+   * EditStep.tsx's rewarpAndUpload — the counterpart that lets a user
+   * correct a fit the automatic pose/segment matching didn't get exactly
+   * right, which (unlike the single-freeze Edit screen) this mode had no
+   * way to do at all before: every keyframe here was 100% dependent on
+   * automatic detection, with no manual escape hatch when a joint (a hand
+   * gripping a barbell, say) is genuinely hard to place with confidence.
+   */
+  async function rewarpAndUpload(kfId: string, framePose: PoseKeypoint[], frameSize: { width: number; height: number }, adjust: ManualAdjust) {
+    const raw = rawAnatomyRef.current.get(kfId);
+    if (!raw) return;
+    const { canvas, info } = fitAnatomyToPose(raw.img, raw.rawPose, raw.rawSize, framePose, frameSize, adjust);
+    const { imageUrl } = await uploadKeyframeAnatomy(sessionId, kfId, canvas.toDataURL("image/png"));
+    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, matchInfo: info });
+  }
+
+  // Debounced re-warp+upload whenever a keyframe's nudge sliders change (avoid spamming uploads while dragging).
+  const nudgeDebounce = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  function scheduleNudge(kf: KeyframeEntry, nextAdjust: ManualAdjust) {
+    patchKeyframe(kf.id, { adjust: nextAdjust });
+    const existing = nudgeDebounce.current.get(kf.id);
+    if (existing) clearTimeout(existing);
+    nudgeDebounce.current.set(
+      kf.id,
+      setTimeout(() => {
+        if (kf.framePose && kf.frameSize) {
+          rewarpAndUpload(kf.id, kf.framePose, kf.frameSize, nextAdjust).catch((e) =>
+            patchKeyframe(kf.id, { error: e instanceof Error ? e.message : String(e) }),
+          );
+        }
+      }, 300),
+    );
   }
 
   const timingDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -155,6 +200,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
     try {
       await deleteKeyframe(sessionId, kf.id);
       setKeyframes((kfs) => kfs.filter((k) => k.id !== kf.id));
+      rawAnatomyRef.current.delete(kf.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -268,6 +314,57 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
                     </p>
                   )}
                   {kf.error && <div className="error-box">{kf.error}</div>}
+
+                  {kf.anatomyImageUrl && kf.frameSize && (
+                    <div className="row" style={{ marginTop: 12, flexWrap: "wrap" }}>
+                      <label className="muted">
+                        Anatomy position X
+                        <br />
+                        <input
+                          type="range"
+                          min={-kf.frameSize.width * 0.3}
+                          max={kf.frameSize.width * 0.3}
+                          value={kf.adjust.offsetX}
+                          onChange={(e) => scheduleNudge(kf, { ...kf.adjust, offsetX: Number(e.target.value) })}
+                        />
+                      </label>
+                      <label className="muted">
+                        Position Y
+                        <br />
+                        <input
+                          type="range"
+                          min={-kf.frameSize.height * 0.3}
+                          max={kf.frameSize.height * 0.3}
+                          value={kf.adjust.offsetY}
+                          onChange={(e) => scheduleNudge(kf, { ...kf.adjust, offsetY: Number(e.target.value) })}
+                        />
+                      </label>
+                      <label className="muted">
+                        Size
+                        <br />
+                        <input
+                          type="range"
+                          min={0.5}
+                          max={1.5}
+                          step={0.01}
+                          value={kf.adjust.scale}
+                          onChange={(e) => scheduleNudge(kf, { ...kf.adjust, scale: Number(e.target.value) })}
+                        />
+                      </label>
+                      <label className="muted">
+                        Rotate
+                        <br />
+                        <input
+                          type="range"
+                          min={-15}
+                          max={15}
+                          step={0.5}
+                          value={kf.adjust.rotationDeg}
+                          onChange={(e) => scheduleNudge(kf, { ...kf.adjust, rotationDeg: Number(e.target.value) })}
+                        />
+                      </label>
+                    </div>
+                  )}
 
                   <div className="row" style={{ marginTop: 12, flexWrap: "wrap" }}>
                     <label className="muted">
