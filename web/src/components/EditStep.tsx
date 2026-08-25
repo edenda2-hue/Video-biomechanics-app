@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { confirmFrame, sendChatEdit, setTimeline, submitPose, uploadAnatomyImage, type TimelineState } from "../api/client";
-import { verticalBounds } from "../cv/alignment";
+import { boundsCenter, verticalBounds } from "../cv/alignment";
 import { fitAnatomyToPose, type AnatomyFitInfo } from "../cv/anatomyFit";
 import { detectPose } from "../cv/pose";
 import { segmentPerson } from "../cv/segmentation";
@@ -46,6 +46,7 @@ export default function EditStep({
     freezeDurationSec: 5,
     transitionInSec: 0.6,
     transitionOutSec: 0.6,
+    transitionStyle: "wipe",
     trimStartSec: 0,
     trimEndSec: videoDurationSec,
   });
@@ -66,6 +67,12 @@ export default function EditStep({
 
   const originalImgRef = useRef<HTMLImageElement | null>(null);
   const maskedLayerRef = useRef<HTMLCanvasElement | null>(null);
+  // Cache for the "pixel-dissolve" style's per-cell reveal-order values —
+  // recomputed only when the grid size (derived from canvas dimensions)
+  // changes, not on every animation frame (this preview redraws up to
+  // 60fps; a fresh per-pixel hash every frame would be wasted work for a
+  // pattern that never actually changes for a given frame size).
+  const pixelDissolveGridRef = useRef<{ cols: number; rows: number; hash: Float32Array } | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const [previewReady, setPreviewReady] = useState(false);
   const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
@@ -218,19 +225,23 @@ export default function EditStep({
     };
   }, [anatomyImageUrl, frameSize, maskVersion, sessionId]);
 
+  // Deterministic 2D pixel hash -> [0,1), matching the formula in
+  // server/src/lib/compositing.ts's pixelHash01 (kept in sync so the
+  // "pixel-dissolve" preview reveals cells in the same relative order the
+  // export reveals pixels, even though the preview uses a coarser cell grid
+  // for performance rather than literal per-pixel granularity — see the
+  // pixelDissolveGridRef comment above).
+  function cellHash01(cx: number, cy: number): number {
+    let h = (cx * 374761393 + cy * 668265263) | 0;
+    h = (h ^ (h >>> 13)) * 1274126177;
+    h = h ^ (h >>> 16);
+    return (h >>> 0) / 4294967295;
+  }
+
   function wipeLayer(masked: HTMLCanvasElement, phase2: "in" | "hold" | "out", phaseT: number): HTMLCanvasElement {
     const { width, height } = masked;
     if (phase2 === "hold" || !originalPose) return masked;
-    const bounds = verticalBounds(originalPose);
-    const span = Math.max(1e-3, bounds.bottom - bounds.top);
-    // Kept in sync with server/src/lib/compositing.ts's blendFrameWipe — a
-    // wide feather (most of the body's height, not a thin line) so the
-    // gradient spans close to the whole figure at any moment instead of a
-    // hard edge with the torso "dressed" while a leg is still bare skin.
-    const feather = span * 0.65;
-    const thresholdNorm = bounds.top - feather / 2 + phaseT * (span + feather);
-    const threshold = thresholdNorm * height;
-    const featherPx = feather * height;
+    const style = timeline.transitionStyle;
 
     const tmp = document.createElement("canvas");
     tmp.width = width;
@@ -238,16 +249,93 @@ export default function EditStep({
     const tctx = tmp.getContext("2d")!;
     tctx.drawImage(masked, 0, 0);
     tctx.globalCompositeOperation = "destination-in";
-    const grad = tctx.createLinearGradient(0, threshold - featherPx / 2, 0, threshold + featherPx / 2);
-    if (phase2 === "in") {
-      grad.addColorStop(0, "rgba(255,255,255,1)");
-      grad.addColorStop(1, "rgba(255,255,255,0)");
+
+    if (style === "dissolve") {
+      // A plain uniform crossfade needs no spatial gradient at all — every
+      // pixel in the mask fades at the same rate.
+      const alpha = phase2 === "in" ? phaseT : 1 - phaseT;
+      tctx.fillStyle = `rgba(255,255,255,${alpha})`;
+      tctx.fillRect(0, 0, width, height);
+    } else if (style === "pixel-dissolve") {
+      // Canvas gradients can't express per-pixel noise, so this reveals a
+      // coarse cell grid instead of literal pixels — cheap enough to redraw
+      // every animation frame, and still reads as "materializing across the
+      // whole body at once" rather than any directional sweep. The actual
+      // export (server/src/lib/compositing.ts) does true per-pixel reveal;
+      // this is a preview approximation of the same effect, not a
+      // pixel-exact match.
+      const CELL_PX = 22;
+      const cols = Math.max(1, Math.round(width / CELL_PX));
+      const rows = Math.max(1, Math.round(height / CELL_PX));
+      const cached = pixelDissolveGridRef.current;
+      let grid = cached && cached.cols === cols && cached.rows === rows ? cached : null;
+      if (!grid) {
+        const hash = new Float32Array(cols * rows);
+        for (let gy = 0; gy < rows; gy++) {
+          for (let gx = 0; gx < cols; gx++) hash[gy * cols + gx] = cellHash01(gx, gy);
+        }
+        grid = { cols, rows, hash };
+        pixelDissolveGridRef.current = grid;
+      }
+      const featherRatio = 0.9;
+      const feather = featherRatio; // metric range is [0,1]
+      const threshold = -feather / 2 + phaseT * (1 + feather);
+      const cellW = width / cols;
+      const cellH = height / rows;
+      for (let gy = 0; gy < rows; gy++) {
+        for (let gx = 0; gx < cols; gx++) {
+          const local = (threshold - grid.hash[gy * cols + gx]) / feather + 0.5;
+          const covered = smoothstep(local);
+          const alpha = phase2 === "in" ? covered : 1 - covered;
+          if (alpha <= 0.002) continue;
+          tctx.fillStyle = `rgba(255,255,255,${alpha})`;
+          tctx.fillRect(gx * cellW, gy * cellH, cellW + 0.5, cellH + 0.5);
+        }
+      }
     } else {
-      grad.addColorStop(0, "rgba(255,255,255,0)");
-      grad.addColorStop(1, "rgba(255,255,255,1)");
+      // "wipe" / "wipe-reverse" / "radial" all reduce to one threshold
+      // sweep with a wide feather band (see server's blendFrameSweep doc
+      // comment for why a wide feather reads as the whole figure
+      // materializing together rather than a hard-edged line), just with a
+      // different gradient geometry.
+      let grad: CanvasGradient;
+      if (style === "radial") {
+        const center = boundsCenter(originalPose);
+        const cxPx = center.cx * width;
+        const cyPx = center.cy * height;
+        const maxRadiusPx = Math.max(
+          Math.hypot(cxPx, cyPx),
+          Math.hypot(cxPx - width, cyPx),
+          Math.hypot(cxPx, cyPx - height),
+          Math.hypot(cxPx - width, cyPx - height),
+        );
+        const feather = maxRadiusPx * 0.55;
+        const threshold = -feather / 2 + phaseT * (maxRadiusPx + feather);
+        grad = tctx.createRadialGradient(cxPx, cyPx, Math.max(0, threshold - feather / 2), cxPx, cyPx, Math.max(0.01, threshold + feather / 2));
+      } else {
+        const bounds = verticalBounds(originalPose);
+        const span = Math.max(1e-3, bounds.bottom - bounds.top);
+        const feather = span * 0.65;
+        const reverse = style === "wipe-reverse";
+        const top = reverse ? 1 - bounds.bottom : bounds.top;
+        const thresholdNorm = top - feather / 2 + phaseT * (span + feather);
+        const threshold = thresholdNorm * height;
+        const featherPx = feather * height;
+        grad = reverse
+          ? tctx.createLinearGradient(0, height - (threshold - featherPx / 2), 0, height - (threshold + featherPx / 2))
+          : tctx.createLinearGradient(0, threshold - featherPx / 2, 0, threshold + featherPx / 2);
+      }
+      if (phase2 === "in") {
+        grad.addColorStop(0, "rgba(255,255,255,1)");
+        grad.addColorStop(1, "rgba(255,255,255,0)");
+      } else {
+        grad.addColorStop(0, "rgba(255,255,255,0)");
+        grad.addColorStop(1, "rgba(255,255,255,1)");
+      }
+      tctx.fillStyle = grad;
+      tctx.fillRect(0, 0, width, height);
     }
-    tctx.fillStyle = grad;
-    tctx.fillRect(0, 0, width, height);
+
     tctx.globalCompositeOperation = "source-over";
     return tmp;
   }
@@ -349,13 +437,17 @@ export default function EditStep({
     try {
       const result = await sendChatEdit(sessionId, text);
       setMessages((m) => [...m, { role: "assistant", text: result.reply }]);
-      setTimelineState({
+      // The chat endpoint only ever adjusts numeric timing, never the
+      // transition style — carry the existing style forward rather than
+      // expecting it back from a response that doesn't include it.
+      setTimelineState((prev) => ({
+        ...prev,
         freezeDurationSec: result.timeline.freezeDurationSec,
         transitionInSec: result.timeline.transitionInSec,
         transitionOutSec: result.timeline.transitionOutSec,
         trimStartSec: result.timeline.trimStartSec,
         trimEndSec: result.timeline.trimEndSec,
-      });
+      }));
 
       if (result.frameChanged && result.frameUrl) {
         setFreezeSec(result.timeline.freezeSec);
@@ -430,7 +522,9 @@ export default function EditStep({
       {matchInfo && phase === "ready" && (
         <p className="muted">
           {matchInfo.mode === "puppet" &&
-            `Bent every body segment (${matchInfo.matched}/${matchInfo.total}) to match this exact pose — works even with a generic standing anatomy image.`}
+            (matchInfo.gapsFilled
+              ? `Bent ${matchInfo.matched} of ${matchInfo.total} body segments to match this exact pose (the rest — usually a hand or foot — filled in from a whole-image fit).`
+              : `Bent every body segment (${matchInfo.matched}/${matchInfo.total}) to match this exact pose — works even with a generic standing anatomy image.`)}
           {matchInfo.mode === "rigid" &&
             `Auto-aligned as a whole image using ${matchInfo.matched} of ${matchInfo.total} detected joints (not enough segments matched for a full per-limb fit — use the sliders or chat to fine-tune).`}
           {matchInfo.mode === "center" &&
@@ -555,6 +649,19 @@ export default function EditStep({
                 onChange={(e) => persistTimeline({ transitionOutSec: Number(e.target.value) })}
                 style={{ width: 90 }}
               />
+            </label>
+            <label className="muted">
+              Transition effect<br />
+              <select
+                value={timeline.transitionStyle}
+                onChange={(e) => persistTimeline({ transitionStyle: e.target.value as TimelineState["transitionStyle"] })}
+              >
+                <option value="wipe">Head to foot</option>
+                <option value="wipe-reverse">Foot to head</option>
+                <option value="radial">Grows from within</option>
+                <option value="pixel-dissolve">Materializes gradually</option>
+                <option value="dissolve">Simple fade</option>
+              </select>
             </label>
             <label className="muted">
               Trim start (s)<br />

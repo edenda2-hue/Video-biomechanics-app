@@ -1,14 +1,22 @@
 // Shared "fit one anatomy image onto one target pose" logic, used by both
 // the single-freeze Edit screen and Anatomy Keyframes mode (every keyframe
 // runs this same fit independently, against its own frame's pose). Prefers
-// the per-limb skeletal-puppet warp (limbWarp.ts) whenever every one of the
-// 14 bone segments resolves confidently between the anatomy image and the
-// target pose — that's what lets a *generic* anatomy image bend to match
-// whatever pose the target frame shows, not just be uniformly scaled/
-// rotated/positioned onto it. Falls back to a rigid whole-image fit (or a
-// centered scale-to-fit) when segment detection is incomplete, since a
-// partial puppet would leave visible gaps where unresolved limbs simply
-// aren't drawn.
+// the per-limb skeletal-puppet warp (limbWarp.ts) whenever at least
+// PUPPET_MIN_SEGMENTS of the 14 bone segments resolve confidently between
+// the anatomy image and the target pose — that's what lets a *generic*
+// anatomy image bend to match whatever pose the target frame shows, not
+// just be uniformly scaled/rotated/positioned onto it. A hand or foot
+// keypoint is very commonly the one that fails (gripping a barbell, inside
+// a shoe against similar-colored ground) even when every other joint
+// resolves fine, so requiring literally all 14 threw away a near-perfect
+// puppet fit for one occluded extremity; any segment that doesn't resolve
+// is instead filled in from a whole-image rigid fit underneath the puppet
+// layer, so a missing hand/foot degrades gracefully to "slightly less
+// precise there" instead of "no per-limb warp anywhere in the image."
+// Falls back to a pure rigid whole-image fit (or a centered scale-to-fit)
+// only when segment detection is too sparse for the puppet to read as a
+// coherent body at all.
+const PUPPET_MIN_SEGMENTS = 7; // ~half of BONE_SEGMENTS.length (14)
 import {
   composeManualAdjustment,
   fitSimilarityTransform,
@@ -20,7 +28,7 @@ import { BONE_SEGMENTS, computeSegmentTransforms, renderSkeletalPuppetFrameFromP
 import type { PoseKeypoint } from "../types";
 
 export type AnatomyFitInfo =
-  | { mode: "puppet"; matched: number; total: number }
+  | { mode: "puppet"; matched: number; total: number; gapsFilled: boolean }
   | { mode: "rigid"; matched: number; total: number }
   | { mode: "center" };
 
@@ -69,9 +77,28 @@ export function fitAnatomyToPose(
 
   if (rawPose.length > 0) {
     const segments = computeSegmentTransforms(rawPose, targetPose, rawSize, targetSize);
-    if (segments.size === BONE_SEGMENTS.length) {
-      baseCanvas = renderSkeletalPuppetFrameFromPoses(rawImage, rawPose, targetPose, rawSize, targetSize);
-      info = { mode: "puppet", matched: segments.size, total: BONE_SEGMENTS.length };
+    if (segments.size >= PUPPET_MIN_SEGMENTS) {
+      const puppetCanvas = renderSkeletalPuppetFrameFromPoses(rawImage, rawPose, targetPose, rawSize, targetSize);
+      const gapsFilled = segments.size < BONE_SEGMENTS.length;
+      if (gapsFilled) {
+        // Missing segments (most often a hand or foot) are left fully
+        // transparent by the puppet renderer; fill them from a whole-image
+        // rigid fit underneath rather than showing a hole or discarding the
+        // (otherwise good) per-limb warp for every other segment.
+        const fit = fitSimilarityTransform(rawPose, targetPose, rawSize, targetSize);
+        const composed = document.createElement("canvas");
+        composed.width = targetSize.width;
+        composed.height = targetSize.height;
+        const cctx = composed.getContext("2d")!;
+        if (fit.matchedPoints >= 3) {
+          cctx.drawImage(warpImageToCanvas(rawImage, fit.transform, targetSize.width, targetSize.height), 0, 0);
+        }
+        cctx.drawImage(puppetCanvas, 0, 0);
+        baseCanvas = composed;
+      } else {
+        baseCanvas = puppetCanvas;
+      }
+      info = { mode: "puppet", matched: segments.size, total: BONE_SEGMENTS.length, gapsFilled };
     } else {
       const fit = fitSimilarityTransform(rawPose, targetPose, rawSize, targetSize);
       const t = fit.matchedPoints >= 3 ? fit.transform : centerFitTransform(rawSize, targetSize);

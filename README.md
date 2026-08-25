@@ -118,25 +118,77 @@ literally, not just as a prompt instruction:
    running fine (`server/scripts/responsiveness-stress.mjs` guards against
    this regressing). Outside the mask, `alpha` never affects the output —
    background pixels are always the literal original bytes. Inside the
-   mask, the default
-   **"wipe" style** sweeps `alpha` from head to foot — a *wide* soft gradient
-   (spanning ~65% of the person's own height, not a thin line) so the whole
-   figure materializes together with a head-first bias, rather than a hard
-   edge where the torso is fully "dressed" while a leg is still bare skin
-   (an earlier, much narrower feather read exactly that way on a real
-   export and was widened directly in response) — and rather than a uniform
-   crossfade either; it holds fully "on," then sweeps the same way in
-   reverse to reveal the original body again.
+   mask, one of five **transition styles** (user-selectable per session/
+   keyframe — see "Transition styles" below) governs how `alpha` varies
+   spatially: the default **"wipe"** sweeps head-to-foot with a *wide* soft
+   gradient (spanning ~65% of the person's own height, not a thin line) so
+   the whole figure materializes together with a head-first bias, rather
+   than a hard edge where the torso is fully "dressed" while a leg is still
+   bare skin (an earlier, much narrower feather read exactly that way on a
+   real export and was widened directly in response); it holds fully "on,"
+   then sweeps the same way in reverse to reveal the original body again.
 4. That freeze segment is encoded and spliced into the original video before
    and after the freeze point (`lib/ffmpeg.ts#assembleFinalVideo`), with the
    original audio held silent for the freeze duration so audio/video stay in
    sync when the clip resumes.
 
-The Edit screen renders the exact same wipe blend live in a `<canvas>` (via
-gradient-based alpha compositing) so you can scrub/tune timing before
-rendering the final MP4. Trim (`trimStartSec`/`trimEndSec`, applied at
-export time) lets the exported clip cover only part of the source video;
+The Edit screen renders the exact same blend live in a `<canvas>` (via
+gradient-based alpha compositing) so you can scrub/tune timing and effect
+before rendering the final MP4. Trim (`trimStartSec`/`trimEndSec`, applied
+at export time) lets the exported clip cover only part of the source video;
 `freezeSec` must fall within the trimmed range.
+
+### Transition styles
+
+Direct feedback on the "wipe" style even after the feather was widened: the
+anatomy still "puts itself on" in a way that reads as computerized rather
+than natural, and there was demand for real alternatives — an entrance from
+inside the body, from the top or bottom specifically, and pixels dressing
+on gradually across the whole figure rather than any directional sweep.
+`server/src/types.ts`'s `TransitionStyle` now has five values, selectable
+per single-freeze session (Edit screen) and independently per keyframe
+(Anatomy Keyframes mode, since different keyframes can reasonably want
+different effects):
+
+- **wipe** — head-to-foot (the original/default).
+- **wipe-reverse** — foot-to-head, the same sweep in the opposite direction.
+- **radial** — grows outward from the body's own center rather than
+  sweeping in one direction, for an "emerging from within" look.
+- **pixel-dissolve** — individual pixels reveal in a spatially-random but
+  time-stable order across the *whole* mask at once (a fixed 2D hash of
+  each pixel's coordinates, not re-randomized per frame, so it materializes
+  smoothly rather than flickering like static) — no directional sweep at
+  all, closer to "coming into focus everywhere" than any wipe.
+- **dissolve** — a plain uniform crossfade, already implemented before this
+  round but never exposed in the UI; every masked pixel fades at the same
+  rate regardless of position.
+
+`server/src/lib/compositing.ts`'s `blendFrameSweep` generalizes the
+original single-purpose `blendFrameWipe` into one function covering the
+first four: each style reduces to a per-pixel scalar "metric" (normalized Y
+for wipe/wipe-reverse, pixel distance from center for radial, a per-pixel
+hash for pixel-dissolve) compared against a threshold that sweeps across
+the metric's own range as the transition progresses — the same
+smoothstep-with-feathering math the original wipe used, so every style
+still reaches exact 0%/100% coverage at the transition's start/end
+regardless of feather width. `dissolve` stays on the separate, simpler
+uniform-alpha path (`blendFrame`) since it needs no spatial metric at all.
+The client-side live preview (`EditStep.tsx`'s `wipeLayer`) mirrors all
+five: `wipe`/`wipe-reverse`/`radial` as canvas gradients (linear or
+`createRadialGradient`, both native and cheap enough for a ~60fps scrubber
+redraw), `dissolve` as a flat fill, and `pixel-dissolve` as a coarse cached
+cell grid (canvas has no way to express true per-pixel noise as a gradient,
+and recomputing a real per-pixel hash at native frame resolution every
+animation frame would be real jank for an interactive preview) — a
+preview approximation of the same effect the export renders exactly, not a
+pixel-for-pixel match. All five were verified end-to-end against a flat-
+color test video (so the composited color unambiguously reveals the alpha
+pattern rather than conflating it with a busy test-pattern background):
+wipe and wipe-reverse show the expected opposite gradient directions,
+radial fades at both the top and bottom of a tall test shape (confirming
+it isn't just another directional wipe), pixel-dissolve shows a visibly
+speckled reveal, and dissolve shows one flat blended color with no spatial
+gradient at all.
 
 **Approving the preview.** Every time the anatomy image, alignment, or
 timing changes, the Edit screen auto-plays the full effect once; "Approve &
@@ -621,12 +673,20 @@ change.
 ## Known limitations
 
 - **Alignment quality depends on pose detection succeeding on your uploaded
-  image.** The per-limb skeletal-puppet fit only engages when every one of
-  the 14 body segments resolves confidently; an abstract/stylized anatomical
-  figure may detect fewer joints than a photo, in which case it falls back
-  to a single whole-image fit (or a centered scale-to-fit placement when
-  fewer than 3 joints match at all). The nudge sliders/chat are always
-  available for fine-tuning regardless of which path was used.
+  image.** The per-limb skeletal-puppet fit engages once at least
+  `PUPPET_MIN_SEGMENTS` (7, about half) of the 14 body segments resolve
+  confidently — any segment that doesn't (a hand or foot is the most common
+  case, e.g. gripping a barbell or occluded inside a shoe) is filled in from
+  a whole-image rigid fit underneath the puppet layer rather than either
+  showing a transparent hole or discarding the per-limb warp for every
+  *other* segment (the original all-14-or-nothing gate did the latter, and
+  was directly responsible for a real deadlift keyframe getting a visibly
+  worse whole-image fit than a neighboring keyframe purely because one hand
+  was gripping the bar). Falls back to a pure whole-image fit only when
+  segment detection is too sparse for the puppet to read as a coherent body
+  at all (or a centered scale-to-fit placement when fewer than 3 joints
+  match). The nudge sliders/chat are always available for fine-tuning
+  regardless of which path was used.
 - **The offline chat mock has narrow language understanding** (English
   regex patterns only) — it's there so the mechanism is testable without an
   API key, not as a substitute for the real model. Add `OPENAI_API_KEY` for

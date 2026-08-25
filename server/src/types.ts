@@ -44,6 +44,19 @@ export interface VideoMetadata {
   orientation: "landscape" | "portrait" | "square";
 }
 
+/**
+ * How the anatomy image "arrives" over a freeze/keyframe transition:
+ * "wipe" sweeps top-to-bottom (head-first), "wipe-reverse" bottom-to-top
+ * (feet-first), "radial" grows outward from the body's center (an
+ * "emerging from within" look), "pixel-dissolve" reveals individual pixels
+ * in a spatially-random but time-stable order across the whole body at
+ * once (no directional sweep at all), and "dissolve" is a plain uniform
+ * crossfade. See server/src/lib/compositing.ts's blendFrameSweep for how
+ * the first four share one smoothstep-threshold-with-feathering core.
+ */
+export const TRANSITION_STYLES = ["wipe", "wipe-reverse", "radial", "pixel-dissolve", "dissolve"] as const;
+export type TransitionStyle = (typeof TRANSITION_STYLES)[number];
+
 export type MuscleRole = "agonist" | "synergist" | "stabilizer";
 
 export interface MuscleSuggestion {
@@ -92,6 +105,7 @@ export interface Keyframe {
   holdDurationSec: number;
   transitionInSec: number;
   transitionOutSec: number;
+  transitionStyle: TransitionStyle;
 }
 
 export interface Session {
@@ -103,6 +117,7 @@ export interface Session {
   freezeDurationSec: number;
   transitionInSec: number;
   transitionOutSec: number;
+  transitionStyle: TransitionStyle;
   /** Export trims the source video to [trimStartSec, trimEndSec] before splicing in the freeze. */
   trimStartSec: number;
   trimEndSec?: number;

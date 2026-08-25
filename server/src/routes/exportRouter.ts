@@ -1,10 +1,11 @@
 import path from "node:path";
 import { Router } from "express";
-import { buildFreezeSequence, verticalBoundsFromPose } from "../lib/compositing.js";
+import { buildFreezeSequence, radialCenterFromPose, verticalBoundsFromPose } from "../lib/compositing.js";
 import { assembleFinalVideo, encodeImageSequence } from "../lib/ffmpeg.js";
 import { getJob, setJob } from "../lib/exportJobs.js";
 import { releaseMemory } from "../lib/memory.js";
 import { requireSession, sessionDir, updateSession, HttpError } from "../lib/storage.js";
+import { TRANSITION_STYLES, type TransitionStyle } from "../types.js";
 
 export const exportRouter = Router();
 
@@ -13,21 +14,27 @@ export const exportRouter = Router();
 exportRouter.put("/sessions/:id/timeline", (req, res, next) => {
   try {
     const session = requireSession(req.params.id);
-    const { freezeDurationSec, transitionInSec, transitionOutSec, trimStartSec, trimEndSec } = req.body ?? {};
-    const patch: Record<string, number> = {};
+    const { freezeDurationSec, transitionInSec, transitionOutSec, transitionStyle, trimStartSec, trimEndSec } = req.body ?? {};
+    const patch: Record<string, number | TransitionStyle> = {};
     if (freezeDurationSec !== undefined) patch.freezeDurationSec = Number(freezeDurationSec);
     if (transitionInSec !== undefined) patch.transitionInSec = Number(transitionInSec);
     if (transitionOutSec !== undefined) patch.transitionOutSec = Number(transitionOutSec);
     if (trimStartSec !== undefined) patch.trimStartSec = Number(trimStartSec);
     if (trimEndSec !== undefined) patch.trimEndSec = Number(trimEndSec);
+    if (transitionStyle !== undefined) {
+      if (!TRANSITION_STYLES.includes(transitionStyle)) {
+        throw new HttpError(400, `transitionStyle must be one of: ${TRANSITION_STYLES.join(", ")}`);
+      }
+      patch.transitionStyle = transitionStyle as TransitionStyle;
+    }
 
-    const inSec = patch.transitionInSec ?? session.transitionInSec;
-    const outSec = patch.transitionOutSec ?? session.transitionOutSec;
-    const dur = patch.freezeDurationSec ?? session.freezeDurationSec;
+    const inSec = Number(patch.transitionInSec ?? session.transitionInSec);
+    const outSec = Number(patch.transitionOutSec ?? session.transitionOutSec);
+    const dur = Number(patch.freezeDurationSec ?? session.freezeDurationSec);
     if (inSec + outSec >= dur) throw new HttpError(400, "transitionInSec + transitionOutSec must be less than freezeDurationSec");
 
-    const trimStart = patch.trimStartSec ?? session.trimStartSec;
-    const trimEnd = patch.trimEndSec ?? session.trimEndSec ?? session.metadata?.durationSec;
+    const trimStart = Number(patch.trimStartSec ?? session.trimStartSec);
+    const trimEnd = patch.trimEndSec !== undefined ? Number(patch.trimEndSec) : (session.trimEndSec ?? session.metadata?.durationSec);
     if (trimEnd !== undefined) {
       if (trimStart < 0 || trimEnd > (session.metadata?.durationSec ?? trimEnd) || trimStart >= trimEnd) {
         throw new HttpError(400, "trimStartSec/trimEndSec must be within the video and trimStartSec < trimEndSec");
@@ -38,7 +45,14 @@ exportRouter.put("/sessions/:id/timeline", (req, res, next) => {
     }
 
     updateSession(session.id, patch);
-    res.json({ freezeDurationSec: dur, transitionInSec: inSec, transitionOutSec: outSec, trimStartSec: trimStart, trimEndSec: trimEnd });
+    res.json({
+      freezeDurationSec: dur,
+      transitionInSec: inSec,
+      transitionOutSec: outSec,
+      transitionStyle: (patch.transitionStyle as TransitionStyle) ?? session.transitionStyle,
+      trimStartSec: trimStart,
+      trimEndSec: trimEnd,
+    });
   } catch (err) {
     next(err);
   }
@@ -64,6 +78,7 @@ exportRouter.post("/sessions/:id/export", (req, res, next) => {
       freezeDurationSec,
       transitionInSec,
       transitionOutSec,
+      transitionStyle,
       trimStartSec,
       pose,
     } = session;
@@ -93,8 +108,9 @@ exportRouter.post("/sessions/:id/export", (req, res, next) => {
             holdSec,
             transitionOutSec,
             outDir: seqDir,
-            style: "wipe",
+            style: transitionStyle,
             verticalBounds: pose ? verticalBoundsFromPose(pose) : undefined,
+            radialCenter: pose ? radialCenterFromPose(pose) : undefined,
           },
           (fraction) =>
             setJob(session.id, {

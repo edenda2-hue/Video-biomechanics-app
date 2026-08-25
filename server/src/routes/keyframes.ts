@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Router } from "express";
 import { nanoid } from "nanoid";
-import { buildFreezeSequence, verticalBoundsFromPose } from "../lib/compositing.js";
+import { buildFreezeSequence, radialCenterFromPose, verticalBoundsFromPose } from "../lib/compositing.js";
 import { assembleMultiFreezeVideo, encodeImageSequence, extractFrame, type MultiFreezeKeyframeSegment } from "../lib/ffmpeg.js";
 import { getJob, setJob } from "../lib/exportJobs.js";
 import { releaseMemory } from "../lib/memory.js";
 import { requireSession, sessionDir, updateSession, HttpError } from "../lib/storage.js";
-import type { Keyframe, PoseKeypoint } from "../types.js";
+import { TRANSITION_STYLES, type Keyframe, type PoseKeypoint, type TransitionStyle } from "../types.js";
 
 export const keyframesRouter = Router();
 
@@ -52,6 +52,7 @@ keyframesRouter.post("/sessions/:id/keyframes", async (req, res, next) => {
       holdDurationSec: 3,
       transitionInSec: 0.4,
       transitionOutSec: 0.4,
+      transitionStyle: "wipe",
     };
     updateSession(session.id, { keyframes: [...session.keyframes, keyframe] });
 
@@ -142,6 +143,12 @@ keyframesRouter.put("/sessions/:id/keyframes/:kfId", (req, res, next) => {
     if (req.body?.holdDurationSec !== undefined) patch.holdDurationSec = Number(req.body.holdDurationSec);
     if (req.body?.transitionInSec !== undefined) patch.transitionInSec = Number(req.body.transitionInSec);
     if (req.body?.transitionOutSec !== undefined) patch.transitionOutSec = Number(req.body.transitionOutSec);
+    if (req.body?.transitionStyle !== undefined) {
+      if (!TRANSITION_STYLES.includes(req.body.transitionStyle)) {
+        throw new HttpError(400, `transitionStyle must be one of: ${TRANSITION_STYLES.join(", ")}`);
+      }
+      patch.transitionStyle = req.body.transitionStyle as TransitionStyle;
+    }
 
     const holdDurationSec = patch.holdDurationSec ?? kf.holdDurationSec;
     const transitionInSec = patch.transitionInSec ?? kf.transitionInSec;
@@ -218,8 +225,9 @@ keyframesRouter.post("/sessions/:id/keyframes/export", (req, res, next) => {
               holdSec,
               transitionOutSec: kf.transitionOutSec,
               outDir: seqDir,
-              style: "wipe",
+              style: kf.transitionStyle,
               verticalBounds: verticalBoundsFromPose(kf.pose!),
+              radialCenter: radialCenterFromPose(kf.pose!),
               excludeHeadPose: kf.pose,
             },
             (fraction) =>

@@ -179,10 +179,19 @@ export function warpImageToCanvas(
   return canvas;
 }
 
-/** Vertical [top, bottom] extent of the person in normalized (0-1) frame coordinates, used by the wipe transition. */
+/** Vertical [top, bottom] extent of the person in normalized (0-1) frame coordinates, used by the "wipe"/"wipe-reverse" transition styles. */
 export function verticalBounds(pose: PoseKeypoint[]): { top: number; bottom: number } {
   const confident = pose.filter((k) => k.confidence >= 0.3);
   const ys = confident.map((k) => k.y);
   if (ys.length === 0) return { top: 0.05, bottom: 0.95 };
   return { top: Math.min(...ys), bottom: Math.max(...ys) };
+}
+
+/** Normalized (0-1) center of the person's bounding box, used by the "radial" transition style. Mirrors server/src/lib/compositing.ts's radialCenterFromPose. */
+export function boundsCenter(pose: PoseKeypoint[]): { cx: number; cy: number } {
+  const confident = pose.filter((k) => k.confidence >= 0.3);
+  if (confident.length === 0) return { cx: 0.5, cy: 0.5 };
+  const xs = confident.map((k) => k.x);
+  const ys = confident.map((k) => k.y);
+  return { cx: (Math.min(...xs) + Math.max(...xs)) / 2, cy: (Math.min(...ys) + Math.max(...ys)) / 2 };
 }

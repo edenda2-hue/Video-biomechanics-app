@@ -1,4 +1,4 @@
-import type { Keyframe, LabelPlacement, MuscleSuggestion, PoseKeypoint, QualityScore, Session, VideoMetadata } from "../types";
+import type { Keyframe, LabelPlacement, MuscleSuggestion, PoseKeypoint, QualityScore, Session, TransitionStyle, VideoMetadata } from "../types";
 
 const BASE = "/api";
 
@@ -121,6 +121,7 @@ export interface TimelineState {
   freezeDurationSec: number;
   transitionInSec: number;
   transitionOutSec: number;
+  transitionStyle: TransitionStyle;
   trimStartSec: number;
   trimEndSec: number;
 }
@@ -258,7 +259,7 @@ export async function uploadKeyframeAnatomy(id: string, kfId: string, imagePngBa
 export async function updateKeyframe(
   id: string,
   kfId: string,
-  patch: Partial<Pick<Keyframe, "holdDurationSec" | "transitionInSec" | "transitionOutSec">>,
+  patch: Partial<Pick<Keyframe, "holdDurationSec" | "transitionInSec" | "transitionOutSec" | "transitionStyle">>,
 ): Promise<Keyframe> {
   return handle(
     await fetch(`${BASE}/sessions/${id}/keyframes/${kfId}`, {

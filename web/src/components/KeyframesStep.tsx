@@ -13,7 +13,7 @@ import { fitAnatomyToPose, type AnatomyFitInfo } from "../cv/anatomyFit";
 import { useJobPolling } from "../hooks/useJobPolling";
 import { detectPose } from "../cv/pose";
 import { segmentPerson } from "../cv/segmentation";
-import type { PoseKeypoint, VideoMetadata } from "../types";
+import type { PoseKeypoint, TransitionStyle, VideoMetadata } from "../types";
 
 const PHASE_LABEL: Record<ExportJobStatus["phase"], string> = {
   compositing: "Compositing the keyframe anatomy",
@@ -43,6 +43,7 @@ interface KeyframeEntry {
   holdDurationSec: number;
   transitionInSec: number;
   transitionOutSec: number;
+  transitionStyle: TransitionStyle;
   busy: boolean;
   error: string | null;
 }
@@ -103,6 +104,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
             holdDurationSec: 3,
             transitionInSec: 0.4,
             transitionOutSec: 0.4,
+            transitionStyle: "wipe" as const,
             busy: false,
             error: null,
           },
@@ -138,7 +140,10 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
   }
 
   const timingDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function scheduleTimingUpdate(kf: KeyframeEntry, patch: { holdDurationSec?: number; transitionInSec?: number; transitionOutSec?: number }) {
+  function scheduleTimingUpdate(
+    kf: KeyframeEntry,
+    patch: { holdDurationSec?: number; transitionInSec?: number; transitionOutSec?: number; transitionStyle?: TransitionStyle },
+  ) {
     patchKeyframe(kf.id, patch);
     if (timingDebounce.current) clearTimeout(timingDebounce.current);
     timingDebounce.current = setTimeout(() => {
@@ -247,7 +252,10 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
                   {kf.busy && <p className="muted">Fitting…</p>}
                   {kf.matchInfo && (
                     <p className="muted" style={{ marginTop: 4 }}>
-                      {kf.matchInfo.mode === "puppet" && `Bent every body segment (${kf.matchInfo.matched}/${kf.matchInfo.total}) to match this frame.`}
+                      {kf.matchInfo.mode === "puppet" &&
+                        (kf.matchInfo.gapsFilled
+                          ? `Bent ${kf.matchInfo.matched} of ${kf.matchInfo.total} body segments to match this frame (rest filled from a whole-image fit).`
+                          : `Bent every body segment (${kf.matchInfo.matched}/${kf.matchInfo.total}) to match this frame.`)}
                       {kf.matchInfo.mode === "rigid" && `Auto-aligned as a whole image (${kf.matchInfo.matched}/${kf.matchInfo.total} joints matched).`}
                       {kf.matchInfo.mode === "center" && "Couldn't reliably detect a pose — placed centered."}
                     </p>
@@ -290,6 +298,20 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
                         onChange={(e) => scheduleTimingUpdate(kf, { transitionOutSec: Number(e.target.value) })}
                         style={{ width: 90 }}
                       />
+                    </label>
+                    <label className="muted">
+                      Transition effect
+                      <br />
+                      <select
+                        value={kf.transitionStyle}
+                        onChange={(e) => scheduleTimingUpdate(kf, { transitionStyle: e.target.value as TransitionStyle })}
+                      >
+                        <option value="wipe">Head to foot</option>
+                        <option value="wipe-reverse">Foot to head</option>
+                        <option value="radial">Grows from within</option>
+                        <option value="pixel-dissolve">Materializes gradually</option>
+                        <option value="dissolve">Simple fade</option>
+                      </select>
                     </label>
                   </div>
 

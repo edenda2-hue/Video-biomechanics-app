@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import type { LabelPlacement, PoseKeypoint } from "../types.js";
+import type { LabelPlacement, PoseKeypoint, TransitionStyle } from "../types.js";
+
+type SweepStyle = Exclude<TransitionStyle, "dissolve">;
 
 function smoothstep(t: number): number {
   const c = Math.min(1, Math.max(0, t));
@@ -22,11 +24,20 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-/** Normalized [top, bottom] vertical extent of the person, for the wipe transition's sweep geometry. */
+/** Normalized [top, bottom] vertical extent of the person, for the "wipe"/"wipe-reverse" sweep geometry. */
 export function verticalBoundsFromPose(pose: PoseKeypoint[]): { top: number; bottom: number } {
   const ys = pose.filter((k) => k.confidence >= 0.3).map((k) => k.y);
   if (ys.length === 0) return { top: 0.05, bottom: 0.95 };
   return { top: Math.min(...ys), bottom: Math.max(...ys) };
+}
+
+/** Normalized [0,1] center of the person's bounding box, for the "radial" sweep style ("anatomy grows from within"). */
+export function radialCenterFromPose(pose: PoseKeypoint[]): { cx: number; cy: number } {
+  const confident = pose.filter((k) => k.confidence >= 0.3);
+  if (confident.length === 0) return { cx: 0.5, cy: 0.5 };
+  const xs = confident.map((k) => k.x);
+  const ys = confident.map((k) => k.y);
+  return { cx: (Math.min(...xs) + Math.max(...xs)) / 2, cy: (Math.min(...ys) + Math.max(...ys)) / 2 };
 }
 
 export interface FreezeSequenceOptions {
@@ -38,10 +49,12 @@ export interface FreezeSequenceOptions {
   holdSec: number;
   transitionOutSec: number;
   outDir: string;
-  /** "wipe" sweeps head-to-foot (the anatomy "puts itself on"); "dissolve" is a uniform crossfade. */
-  style?: "wipe" | "dissolve";
-  /** Normalized [0,1] vertical extent of the person, required for "wipe". */
+  /** See TransitionStyle in ../types.ts. Defaults to "wipe". */
+  style?: TransitionStyle;
+  /** Normalized [0,1] vertical extent of the person; used by "wipe"/"wipe-reverse". */
   verticalBounds?: { top: number; bottom: number };
+  /** Normalized [0,1] center of the person; used by "radial". */
+  radialCenter?: { cx: number; cy: number };
   /** Anatomy Keyframes mode: when set, zeroes the mask around the head (see excludeHeadFromMask) so the real head/face always shows through, only the body swaps to anatomy. */
   excludeHeadPose?: PoseKeypoint[];
 }
@@ -120,6 +133,8 @@ export async function buildFreezeSequence(
   for (let i = 0; i < outFrames; i++) specs.push({ phase: "out", t: i / (outFrames - 1 || 1) });
 
   const bounds = opts.verticalBounds ?? { top: 0.05, bottom: 0.95 };
+  const center = opts.radialCenter ?? { cx: 0.5, cy: 0.5 };
+  const isSweepStyle = style !== "dissolve";
 
   let index = 0;
   let holdFramePath: string | null = null;
@@ -134,8 +149,8 @@ export async function buildFreezeSequence(
       await fs.copyFile(holdFramePath, outPath);
     } else {
       const frame =
-        spec.phase !== "hold" && style === "wipe"
-          ? await blendFrameWipe(originalBuf, anatomyBuf, maskBuf, width, height, bounds, spec.phase, spec.t)
+        spec.phase !== "hold" && isSweepStyle
+          ? await blendFrameSweep(originalBuf, anatomyBuf, maskBuf, width, height, style, bounds, center, spec.phase, spec.t)
           : await blendFrame(
               originalBuf,
               anatomyBuf,
@@ -156,40 +171,95 @@ export async function buildFreezeSequence(
 }
 
 /**
- * A head-to-foot "wipe" reveal: a soft gradient band sweeps from the top of
- * the person (`bounds.top`) to the bottom (`bounds.bottom`) as `t` goes
- * 0->1. In phase "in", rows above the band become anatomy (the figure
- * "puts itself on" from the head down); in phase "out" the same sweep
- * direction instead reveals the original body again. The sweep overshoots
- * half a feather band on each side so it reaches full coverage/clearance
- * exactly at t=1, matching the flat alpha=1 hold phase with no visible pop.
- *
- * The feather band is deliberately wide (most of the body's own height, not
- * a thin line) so the gradient spans close to the whole figure at any given
- * moment: at t=0.5 the torso is already mostly anatomy while the legs are
- * only just beginning, rather than a hard boundary where everything above
- * some row is 100% anatomy and everything below is 100% bare skin. A
- * narrower feather (~12% of the body's height, the original value) reads as
- * a line sweeping down the body with a harsh edge, and was flagged directly
- * from a real export: mid-transition frames showed the torso fully "dressed"
- * while an entire leg was still untouched original footage. Widening it is
- * a pure tuning change — the same math already guarantees exact 0%/100%
- * coverage at t=0/t=1 for any feather width, since the sweep always
- * overshoots by half the feather on each side.
+ * Deterministic, fast 2D pixel hash -> [0,1). Used by the "pixel-dissolve"
+ * sweep style so each pixel's reveal moment is a fixed pseudo-random value:
+ * recomputing the same formula from (x,y) every frame — rather than
+ * caching a random table — is what keeps it stable across every frame of
+ * one transition instead of flickering like TV static.
  */
-async function blendFrameWipe(
+function pixelHash01(x: number, y: number): number {
+  let h = (x * 374761393 + y * 668265263) | 0;
+  h = (h ^ (h >>> 13)) * 1274126177;
+  h = h ^ (h >>> 16);
+  return (h >>> 0) / 4294967295;
+}
+
+/**
+ * Four spatial reveal orders sharing one smoothstep-threshold-with-feathering
+ * core: a per-pixel scalar "metric" is compared against a threshold that
+ * sweeps from `metricMin - feather/2` to `metricMax + feather/2` as `t` goes
+ * 0->1, so every style reaches exact 0%/100% coverage at t=0/t=1 regardless
+ * of feather width (the sweep always overshoots by half the feather on each
+ * side) — matching the flat alpha=1 hold phase with no visible pop.
+ *
+ * - "wipe": metric = normalized y (top-to-bottom, head-first).
+ * - "wipe-reverse": metric = 1 - normalized y (bottom-to-top, feet-first).
+ * - "radial": metric = pixel distance from the body's center, so the
+ *   anatomy grows outward from the torso rather than sweeping in one
+ *   direction (an "emerging from within" look) — the max radius reaches
+ *   the frame's farthest corner from that center, guaranteeing full-canvas
+ *   coverage by t=1 the same way the directional styles guarantee it edge
+ *   to edge.
+ * - "pixel-dissolve": metric = a fixed per-pixel hash, so individual pixels
+ *   across the *whole* body materialize in a spatially-random but
+ *   time-stable order — no directional sweep, more of a "coming into focus
+ *   everywhere at once" look. Its feather is close to the full metric range
+ *   so coverage grows roughly as a uniform fraction of pixels over time
+ *   rather than following any particular radius/line.
+ *
+ * A wide feather (most of the metric's own range, not a thin line/ring) is
+ * what makes "wipe" in particular read as the whole figure materializing
+ * together with a head-first bias rather than a hard-edged line sweeping
+ * down the body — a real export showed the torso already fully "dressed"
+ * while an entire leg was still untouched footage before this was widened.
+ */
+async function blendFrameSweep(
   originalBuf: Buffer,
   anatomyBuf: Buffer,
   maskBuf: Buffer,
   width: number,
   height: number,
+  style: SweepStyle,
   bounds: { top: number; bottom: number },
+  center: { cx: number; cy: number },
   phase: "in" | "out",
   t: number,
 ): Promise<Buffer> {
-  const span = Math.max(1e-3, bounds.bottom - bounds.top);
-  const feather = span * 0.65;
-  const threshold = bounds.top - feather / 2 + t * (span + feather);
+  const cxPx = center.cx * width;
+  const cyPx = center.cy * height;
+
+  let metricMin: number;
+  let metricMax: number;
+  let featherRatio: number;
+  if (style === "wipe") {
+    metricMin = bounds.top;
+    metricMax = bounds.bottom;
+    featherRatio = 0.65;
+  } else if (style === "wipe-reverse") {
+    metricMin = 1 - bounds.bottom;
+    metricMax = 1 - bounds.top;
+    featherRatio = 0.65;
+  } else if (style === "radial") {
+    metricMin = 0;
+    metricMax = Math.max(
+      1e-3,
+      Math.max(
+        Math.hypot(cxPx, cyPx),
+        Math.hypot(cxPx - width, cyPx),
+        Math.hypot(cxPx, cyPx - height),
+        Math.hypot(cxPx - width, cyPx - height),
+      ),
+    );
+    featherRatio = 0.55;
+  } else {
+    metricMin = 0;
+    metricMax = 1;
+    featherRatio = 0.9;
+  }
+
+  const span = Math.max(1e-3, metricMax - metricMin);
+  const feather = span * featherRatio;
+  const threshold = metricMin - feather / 2 + t * (span + feather);
 
   // Only the per-pixel *alpha* is computed in JS (one cheap multiply per
   // pixel); the actual RGB blending is done by compositeOver() using
@@ -197,16 +267,24 @@ async function blendFrameWipe(
   // worker thread pool rather than Node's main JS thread — see
   // compositeOver()'s doc comment for why that matters here.
   const anatomyWithAlpha = Buffer.from(anatomyBuf);
-  const ROWS_PER_CHUNK = 64;
+  const ROWS_PER_CHUNK = 32;
   for (let y = 0; y < height; y++) {
-    const ny = y / height;
-    const local = (threshold - ny) / feather + 0.5;
-    const covered = smoothstep(local); // 1 = swept over (anatomy side), 0 = not yet (original side)
-    const rowAlpha = phase === "in" ? covered : 1 - covered;
+    const wipeMetric = y / height;
     const rowStart = y * width;
     for (let x = 0; x < width; x++) {
       const p = rowStart + x;
-      anatomyWithAlpha[p * 4 + 3] = Math.round(maskBuf[p] * rowAlpha);
+      const metric =
+        style === "wipe"
+          ? wipeMetric
+          : style === "wipe-reverse"
+            ? 1 - wipeMetric
+            : style === "radial"
+              ? Math.hypot(x - cxPx, y - cyPx)
+              : pixelHash01(x, y);
+      const local = (threshold - metric) / feather + 0.5;
+      const covered = smoothstep(local); // 1 = swept over (anatomy side), 0 = not yet (original side)
+      const alpha = phase === "in" ? covered : 1 - covered;
+      anatomyWithAlpha[p * 4 + 3] = Math.round(maskBuf[p] * alpha);
     }
     if (y % ROWS_PER_CHUNK === ROWS_PER_CHUNK - 1) await yieldToEventLoop();
   }

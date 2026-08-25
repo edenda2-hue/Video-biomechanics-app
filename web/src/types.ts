@@ -40,6 +40,11 @@ export interface VideoMetadata {
   orientation: "landscape" | "portrait" | "square";
 }
 
+// Mirrors server/src/types.ts's TransitionStyle — see its doc comment for
+// what each style looks like.
+export const TRANSITION_STYLES = ["wipe", "wipe-reverse", "radial", "pixel-dissolve", "dissolve"] as const;
+export type TransitionStyle = (typeof TRANSITION_STYLES)[number];
+
 export type MuscleRole = "agonist" | "synergist" | "stabilizer";
 
 export interface MuscleSuggestion {
@@ -74,6 +79,7 @@ export interface Keyframe {
   holdDurationSec: number;
   transitionInSec: number;
   transitionOutSec: number;
+  transitionStyle: TransitionStyle;
 }
 
 export interface Session {
@@ -83,6 +89,7 @@ export interface Session {
   freezeDurationSec: number;
   transitionInSec: number;
   transitionOutSec: number;
+  transitionStyle: TransitionStyle;
   exerciseName?: string;
   pose?: PoseKeypoint[];
   anatomyQuality?: QualityScore;
