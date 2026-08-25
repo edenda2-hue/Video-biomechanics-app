@@ -156,13 +156,26 @@ export async function buildFreezeSequence(
 }
 
 /**
- * A head-to-foot "wipe" reveal: a horizontal line sweeps from the top of
+ * A head-to-foot "wipe" reveal: a soft gradient band sweeps from the top of
  * the person (`bounds.top`) to the bottom (`bounds.bottom`) as `t` goes
- * 0->1. In phase "in", rows above the line become anatomy (the figure
+ * 0->1. In phase "in", rows above the band become anatomy (the figure
  * "puts itself on" from the head down); in phase "out" the same sweep
  * direction instead reveals the original body again. The sweep overshoots
  * half a feather band on each side so it reaches full coverage/clearance
  * exactly at t=1, matching the flat alpha=1 hold phase with no visible pop.
+ *
+ * The feather band is deliberately wide (most of the body's own height, not
+ * a thin line) so the gradient spans close to the whole figure at any given
+ * moment: at t=0.5 the torso is already mostly anatomy while the legs are
+ * only just beginning, rather than a hard boundary where everything above
+ * some row is 100% anatomy and everything below is 100% bare skin. A
+ * narrower feather (~12% of the body's height, the original value) reads as
+ * a line sweeping down the body with a harsh edge, and was flagged directly
+ * from a real export: mid-transition frames showed the torso fully "dressed"
+ * while an entire leg was still untouched original footage. Widening it is
+ * a pure tuning change — the same math already guarantees exact 0%/100%
+ * coverage at t=0/t=1 for any feather width, since the sweep always
+ * overshoots by half the feather on each side.
  */
 async function blendFrameWipe(
   originalBuf: Buffer,
@@ -175,7 +188,7 @@ async function blendFrameWipe(
   t: number,
 ): Promise<Buffer> {
   const span = Math.max(1e-3, bounds.bottom - bounds.top);
-  const feather = span * 0.12;
+  const feather = span * 0.65;
   const threshold = bounds.top - feather / 2 + t * (span + feather);
 
   // Only the per-pixel *alpha* is computed in JS (one cheap multiply per

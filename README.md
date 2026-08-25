@@ -119,10 +119,14 @@ literally, not just as a prompt instruction:
    this regressing). Outside the mask, `alpha` never affects the output —
    background pixels are always the literal original bytes. Inside the
    mask, the default
-   **"wipe" style** sweeps `alpha` from head to foot (a soft-edged line
-   descends over ~0.6s, so the anatomy "puts itself on" top-down) rather
-   than a uniform crossfade; it holds fully "on," then sweeps the same way
-   in reverse to reveal the original body again.
+   **"wipe" style** sweeps `alpha` from head to foot — a *wide* soft gradient
+   (spanning ~65% of the person's own height, not a thin line) so the whole
+   figure materializes together with a head-first bias, rather than a hard
+   edge where the torso is fully "dressed" while a leg is still bare skin
+   (an earlier, much narrower feather read exactly that way on a real
+   export and was widened directly in response) — and rather than a uniform
+   crossfade either; it holds fully "on," then sweeps the same way in
+   reverse to reveal the original body again.
 4. That freeze segment is encoded and spliced into the original video before
    and after the freeze point (`lib/ffmpeg.ts#assembleFinalVideo`), with the
    original audio held silent for the freeze duration so audio/video stay in

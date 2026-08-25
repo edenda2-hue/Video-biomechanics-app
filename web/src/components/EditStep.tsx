@@ -223,7 +223,11 @@ export default function EditStep({
     if (phase2 === "hold" || !originalPose) return masked;
     const bounds = verticalBounds(originalPose);
     const span = Math.max(1e-3, bounds.bottom - bounds.top);
-    const feather = span * 0.12;
+    // Kept in sync with server/src/lib/compositing.ts's blendFrameWipe — a
+    // wide feather (most of the body's height, not a thin line) so the
+    // gradient spans close to the whole figure at any moment instead of a
+    // hard edge with the torso "dressed" while a leg is still bare skin.
+    const feather = span * 0.65;
     const thresholdNorm = bounds.top - feather / 2 + phaseT * (span + feather);
     const threshold = thresholdNorm * height;
     const featherPx = feather * height;
