@@ -569,6 +569,77 @@ skeletal-puppet segment that fails to resolve (left transparent by
 `renderSkeletalPuppetFrameFromPoses`) — this fix benefits that mode as well,
 not just the manual-alignment flows.
 
+### Proving the whole chain end-to-end, not just each piece in isolation
+
+After the alpha fix above, the user's report was still "even after I align
+precisely, the export doesn't match what I did." Every piece had already
+been verified individually — the gesture math in isolation, the compositing
+math in isolation — but never the full chain through the real app: real
+touch gesture → confirm → upload → server compositing → ffmpeg encode →
+final file. So that's what got tested, with a real Chromium instance
+driving the actual `KeyframesStep`/`AnatomyAligner` UI (not a synthetic
+harness): upload a synthetic video, add a keyframe, upload a small solid
+anatomy square, dispatch a real two-finger pinch gesture at known
+coordinates, confirm, export, download the real output file, and check
+specific pixels against a hand-derived prediction of exactly where that
+gesture should have placed the square.
+
+Result: exact match. The covered pixel came back anatomy-green, the "gap"
+pixel (inside the person mask but outside the placed square) came back the
+original frame's blue — confirming the alpha fix from above works through
+the real pipeline, not just the isolated repro — and a background pixel
+was untouched. A second run with two keyframes (distinct colors, distinct
+gestures) confirmed no cross-contamination between them — each keyframe's
+hold segment showed exactly its own anatomy, at exactly its own aligned
+position, ruling out a "shows the wrong keyframe" class of bug. Both
+scripts are throwaway/local (they need a running dev server + real
+Chromium, unlike the repo's other smoke tests), but the finding is real:
+**the pipeline was already carrying the confirmed alignment through
+correctly, pixel for pixel.**
+
+### The actual gap: nothing to align *against*
+
+So why did it still feel broken? Because "the export doesn't match what I
+did" doesn't require a pipeline bug — it's also exactly what a *correct*
+pipeline produces when there's no precise target to align to in the first
+place. The aligner showed the real frame underneath a semi-transparent
+anatomy image, but the only way to judge "is this positioned correctly"
+was eyeballing where the anatomy image's edges *seemed* to line up with a
+photo — there was no actual reference for where the person's real outline
+is. Any rectangular (or even well-cropped) anatomy image dragged by eye
+over a photo will end up close-but-not-exact, and the gap-handling fix
+above means any part of that gap now visibly shows the real footage instead
+of being silently absorbed — which, ironically, makes an imprecise
+placement *more* visible than before, not less.
+
+The user's own suggested fix: turn it into a matching game with a visible
+boundary line to fit inside, instead of a free-form eyeball task. Built
+directly: `AnatomyAligner.tsx` now takes an optional `maskImg` — the
+frame's own real person-segmentation mask, already computed for
+compositing anyway — and traces its silhouette into a thin colored outline
+(`buildMaskOutline`: a simple 4-neighbor edge check over the mask's
+in/out pixels, then a one-pixel dilation so it reads clearly at typical
+display sizes) drawn on top of everything else in the aligner canvas,
+always at full opacity regardless of the see-through slider. Both
+`KeyframesStep.tsx` (per keyframe) and `EditStep.tsx` now load the mask
+they already compute for the server as an `<img>` and pass it through, so
+every alignment session gets this same fixed target — the real body
+boundary from that exact frame, not a guess. A "Show target boundary"
+checkbox lets it be hidden if it's in the way. Verified visually (a real
+screenshot through the running app shows the traced outline sitting
+exactly on the mock mask's silhouette) and confirmed the core pixel-level
+E2E check above still passes unchanged with the outline enabled.
+
+**Worth saying plainly, since it's a real limit of what this can fix**:
+this outline is a positioning *aid*, not a cutout. It doesn't reshape or
+clip the anatomy image to the boundary — it just shows you where the
+boundary is. A rectangular anatomy image dragged to fit *inside* that
+outline as closely as possible will still be a rectangle, imperfectly
+covering an irregular (limbed) silhouette; the outline makes it possible to
+get that as close as it can be, not perfect regardless of the source
+image's own shape. An anatomy image cropped with a transparent background
+close to the actual body shape will benefit the most from this.
+
 ## Alternate: AI-generated anatomy (not in the primary flow)
 
 The original OpenAI-based design — the app itself calls `images.edit` on

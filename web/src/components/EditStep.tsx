@@ -58,6 +58,9 @@ export default function EditStep({
 
   const rawAnatomyImgRef = useRef<HTMLImageElement | null>(null);
   const rawAnatomySizeRef = useRef<{ width: number; height: number } | null>(null);
+  // The frame's own segmentation mask, loaded as an image so the aligner
+  // can trace it into a target-boundary outline to align against.
+  const maskImgRef = useRef<HTMLImageElement | null>(null);
 
   const originalImgRef = useRef<HTMLImageElement | null>(null);
   const maskedLayerRef = useRef<HTMLCanvasElement | null>(null);
@@ -86,6 +89,7 @@ export default function EditStep({
     const pose = await detectPose(img);
     const maskDataUrl = await segmentPerson(img, size.width, size.height);
     await submitPose(sessionId, pose, maskDataUrl);
+    maskImgRef.current = await loadImage(maskDataUrl);
     setOriginalPose(pose);
     setMaskVersion((v) => v + 1);
     setPhase(rawAnatomyImgRef.current ? "aligning" : "need-anatomy");
@@ -561,6 +565,7 @@ export default function EditStep({
                 initialAdjust={adjust}
                 onConfirm={handleAlignerConfirm}
                 onCancel={() => setAlignerOpen(false)}
+                maskImg={maskImgRef.current ?? undefined}
               />
             </div>
           )}

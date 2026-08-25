@@ -75,6 +75,9 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
   // Loaded frame images, kept around so re-opening the aligner doesn't
   // re-fetch the frame over the network every time.
   const frameImgRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  // Each keyframe's own segmentation mask, loaded as an image so the
+  // aligner can trace it into a target-boundary outline to align against.
+  const maskImgRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const [aligningKfId, setAligningKfId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -101,6 +104,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
       const maskDataUrl = await segmentPerson(img, frameSize.width, frameSize.height);
       await submitKeyframePose(sessionId, id, framePose, maskDataUrl);
       frameImgRef.current.set(id, img);
+      maskImgRef.current.set(id, await loadImage(maskDataUrl));
 
       setKeyframes((kfs) =>
         [
@@ -219,6 +223,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
       setKeyframes((kfs) => kfs.filter((k) => k.id !== kf.id));
       rawAnatomyRef.current.delete(kf.id);
       frameImgRef.current.delete(kf.id);
+      maskImgRef.current.delete(kf.id);
       if (aligningKfId === kf.id) setAligningKfId(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -304,6 +309,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
                     initialAdjust={kf.adjust}
                     onConfirm={(adjust) => handleAlignerConfirm(kf, adjust)}
                     onCancel={handleAlignerCancel}
+                    maskImg={maskImgRef.current.get(kf.id)}
                   />
                 </div>
               );

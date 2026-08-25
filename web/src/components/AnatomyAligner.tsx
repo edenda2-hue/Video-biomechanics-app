@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent, type WheelEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import { composeManualAdjustment } from "../cv/alignment";
 import { centerFitTransform, DEFAULT_MANUAL_ADJUST, type ManualAdjust } from "../cv/anatomyFit";
 
@@ -28,6 +28,68 @@ export interface AnatomyAlignerProps {
   initialAdjust: ManualAdjust;
   onConfirm: (adjust: ManualAdjust) => void;
   onCancel: () => void;
+  /** The frame's own person-segmentation mask (greyscale, same native size as frameSize), if available — traced into a target-boundary outline over the frame so the alignment is a "fit inside the line" task instead of eyeballing it. Optional: the aligner still works without it. */
+  maskImg?: HTMLImageElement;
+}
+
+/**
+ * Traces a greyscale person mask into a thin colored outline (the mask's
+ * own silhouette edge — where confidence crosses ~50%), at the aligner's
+ * display resolution. This is the visual "target boundary" the user aligns
+ * the anatomy image against, turning positioning from "eyeball it against
+ * the photo" into "fit inside the line" — closer to a matching-game/sticker
+ * task than free-form guessing. Purely a positioning aid: it plays no part
+ * in the actual export compositing, which uses the full-resolution mask
+ * directly (server/src/lib/compositing.ts).
+ */
+function buildMaskOutline(maskImg: HTMLImageElement, width: number, height: number): HTMLCanvasElement {
+  const src = document.createElement("canvas");
+  src.width = width;
+  src.height = height;
+  const sctx = src.getContext("2d")!;
+  sctx.drawImage(maskImg, 0, 0, width, height);
+  const gray = sctx.getImageData(0, 0, width, height).data;
+
+  const THRESHOLD = 128;
+  const inside = new Uint8Array(width * height);
+  for (let i = 0; i < width * height; i++) inside[i] = gray[i * 4] >= THRESHOLD ? 1 : 0;
+
+  const out = document.createElement("canvas");
+  out.width = width;
+  out.height = height;
+  const octx = out.getContext("2d")!;
+  const outData = octx.createImageData(width, height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      if (!inside[i]) continue;
+      const rightOut = x + 1 >= width || !inside[i + 1];
+      const leftOut = x - 1 < 0 || !inside[i - 1];
+      const downOut = y + 1 >= height || !inside[i + width];
+      const upOut = y - 1 < 0 || !inside[i - width];
+      if (!(rightOut || leftOut || downOut || upOut)) continue;
+      // A 1px-wide edge is hard to see at typical display sizes — thicken by
+      // also marking the immediate neighbors of every boundary pixel.
+      for (const [dx, dy] of [
+        [0, 0],
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ]) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+        const o = (ny * width + nx) * 4;
+        outData.data[o] = 255;
+        outData.data[o + 1] = 210;
+        outData.data[o + 2] = 0;
+        outData.data[o + 3] = 255;
+      }
+    }
+  }
+  octx.putImageData(outData, 0, 0);
+  return out;
 }
 
 function dist(a: PointerPt, b: PointerPt): number {
@@ -54,10 +116,20 @@ function clamp(v: number, lo: number, hi: number): number {
  * geometry, no pose data), which the user's own gestures then take over
  * from completely.
  */
-export default function AnatomyAligner({ frameImg, frameSize, anatomyImg, anatomySize, initialAdjust, onConfirm, onCancel }: AnatomyAlignerProps) {
+export default function AnatomyAligner({
+  frameImg,
+  frameSize,
+  anatomyImg,
+  anatomySize,
+  initialAdjust,
+  onConfirm,
+  onCancel,
+  maskImg,
+}: AnatomyAlignerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [adjust, setAdjust] = useState<ManualAdjust>(initialAdjust);
   const [opacity, setOpacity] = useState(0.65);
+  const [showTarget, setShowTarget] = useState(true);
   const pointersRef = useRef<Map<number, PointerPt>>(new Map());
   const gestureRef = useRef<GestureState | null>(null);
 
@@ -67,6 +139,11 @@ export default function AnatomyAligner({ frameImg, frameSize, anatomyImg, anatom
   const pivotX = frameSize.width / 2;
   const pivotY = frameSize.height / 2;
   const baseTransform = centerFitTransform(anatomySize, frameSize);
+
+  // Computed once per (mask, display size) — not on every drag frame — since
+  // it's a fixed reference the anatomy layer moves over, not something that
+  // itself needs to redraw during a gesture.
+  const outlineCanvas = useMemo(() => (maskImg ? buildMaskOutline(maskImg, displayW, displayH) : null), [maskImg, displayW, displayH]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -88,7 +165,14 @@ export default function AnatomyAligner({ frameImg, frameSize, anatomyImg, anatom
     );
     ctx.drawImage(anatomyImg, 0, 0);
     ctx.restore();
-  }, [adjust, opacity, frameImg, anatomyImg, baseTransform, displayW, displayH, displayScale, pivotX, pivotY]);
+
+    // Drawn last, always at full opacity, independent of the see-through
+    // slider above — a fixed target boundary to fit the anatomy layer
+    // inside, like a matching-game outline, rather than a preview layer.
+    if (showTarget && outlineCanvas) {
+      ctx.drawImage(outlineCanvas, 0, 0);
+    }
+  }, [adjust, opacity, showTarget, frameImg, anatomyImg, baseTransform, outlineCanvas, displayW, displayH, displayScale, pivotX, pivotY]);
 
   function canvasPoint(e: PointerEvent<HTMLCanvasElement>): PointerPt {
     const canvas = canvasRef.current!;
@@ -176,6 +260,7 @@ export default function AnatomyAligner({ frameImg, frameSize, anatomyImg, anatom
     <div className="card" style={{ margin: 0, background: "var(--panel-2)" }}>
       <p className="muted" style={{ marginTop: 0 }}>
         Drag with one finger to move, pinch with two fingers to resize/rotate — dress the anatomy layer exactly onto the body below it.
+        {outlineCanvas && " Fit it inside the yellow outline — that's the real body boundary from this exact frame."}
       </p>
       <canvas
         ref={canvasRef}
@@ -206,6 +291,11 @@ export default function AnatomyAligner({ frameImg, frameSize, anatomyImg, anatom
         <button type="button" className="secondary" onClick={() => setAdjust(DEFAULT_MANUAL_ADJUST)}>
           Reset alignment
         </button>
+        {outlineCanvas && (
+          <label className="muted">
+            <input type="checkbox" checked={showTarget} onChange={(e) => setShowTarget(e.target.checked)} /> Show target boundary
+          </label>
+        )}
       </div>
       <div className="row" style={{ marginTop: 12 }}>
         <button type="button" onClick={() => onConfirm(adjust)}>
