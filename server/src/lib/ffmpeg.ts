@@ -50,8 +50,17 @@ const ENCODE_PRESET = "veryfast";
 // min(...) protects its internal comma from being parsed as a filter-chain
 // separator by ffmpeg's own filtergraph syntax (this is not a shell, so it's
 // ffmpeg's quoting rules, not the shell's).
+//
+// `setsar=1` is appended because the concat filter rejects inputs whose
+// *sizes* match but whose SAR (sample aspect ratio) metadata doesn't: the
+// auto ("-2") dimension in `scale` picks the nearest even pixel size and can
+// carry a tiny SAR fudge factor to preserve exact display aspect (observed
+// in production as e.g. 1215:1216) when the source's own dimensions don't
+// divide cleanly, while a freeze segment built fresh from PNG frames comes
+// out at plain 1:1. Forcing SAR to 1:1 on every scaled stream removes that
+// whole class of mismatch regardless of what oddities the source carries.
 function scaleFilterFor(metadata: Pick<VideoMetadata, "orientation">): string {
-  return metadata.orientation === "portrait" ? "scale='min(1080,iw)':-2" : "scale=-2:'min(1080,ih)'";
+  return metadata.orientation === "portrait" ? "scale='min(1080,iw)':-2,setsar=1" : "scale=-2:'min(1080,ih)',setsar=1";
 }
 
 function spawnFfmpeg(args: string[]): ChildProcessWithoutNullStreams {

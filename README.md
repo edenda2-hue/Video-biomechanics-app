@@ -591,11 +591,26 @@ tradeoff discussed with the user before implementing (not a silent
 change), given the app's overriding priority is a completed export over
 maximum resolution.
 
-Whether this closes the gap on the user's actual real-world video is still
-unconfirmed as of this writing. If `over 2GB`/status 137 recurs even with
-this change, the next real lever is bitrate itself (`estimateBitrate` in
-`lib/ffmpeg.ts` currently targets 8-40Mbps, now against the capped
-resolution rather than the source's native one) — again a real quality
+This did resolve the OOM: the next real export on the live deployment got
+all the way past compositing and both encode stages — further than any
+previous attempt — before failing on a *different*, non-memory error:
+`ffmpeg exited with code 1 [Parsed_concat] Input link in0:v0 parameters
+(size 608x1080, SAR 0:1) do not match the corresponding output link in0:v0
+parameters (608x1080, SAR 1215:1216)`. This is a known ffmpeg `concat`
+filter gotcha, unrelated to memory: `scale`'s auto ("-2") dimension picks
+the nearest even pixel size and can carry a small SAR (sample aspect ratio)
+adjustment to preserve exact display aspect when a source's own dimensions
+don't divide cleanly, while a freeze/keyframe segment built fresh from PNG
+frames comes out at plain 1:1 SAR — same pixel size, different SAR
+metadata, which `concat` treats as a mismatch. Every `scaleFilterFor(...)`
+call now appends `setsar=1`, forcing identical SAR on every concat input
+regardless of what the source's own dimensions were, which removes this
+mismatch by construction. Also unconfirmed against the user's real video as
+of this writing.
+
+If bitrate ever needs to come down too, `estimateBitrate` in
+`lib/ffmpeg.ts` (currently 8-40Mbps, now against the capped resolution
+rather than the source's native one) is the next lever — a real quality
 tradeoff that should stay a conscious choice with the user, not a silent
 change.
 
