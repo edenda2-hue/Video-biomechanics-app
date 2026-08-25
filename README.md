@@ -687,6 +687,42 @@ change.
   at all (or a centered scale-to-fit placement when fewer than 3 joints
   match). The nudge sliders/chat are always available for fine-tuning
   regardless of which path was used.
+- **A hard-edged seam can appear at a bent joint even with a full 14/14
+  puppet fit.** Each bone segment is independently rigid-transformed (its
+  own reference-image crop, scaled/rotated/translated onto the target
+  frame's bone) and painted with a hard `ctx.clip()` boundary that fully
+  overwrites whatever the previous segment painted in the overlap zone —
+  cheap, but since two adjacent segments' transforms generally differ (an
+  elbow or knee bent between the reference pose and the target pose), their
+  content doesn't necessarily line up pixel-for-pixel where they meet, and
+  a hard clip edge there can read as a visible seam/kink in the muscle
+  texture right at the joint. `renderSkeletalPuppetFrameFromPoses` (in
+  `web/src/cv/limbWarp.ts`) now accepts an optional `featherPx`: instead of
+  a hard clip, each segment renders onto its own canvas masked by a
+  *blurred* copy of its capsule shape and is alpha-composited
+  (`source-over`) rather than overwritten outright, so two segments blend
+  smoothly across their overlap zone instead of cutting hard at one
+  boundary. `anatomyFit.ts`'s one-time static fit (single-freeze/Anatomy
+  Keyframes) opts into this; continuous mode's per-*frame* puppet render
+  stays on the cheap hard-edge path by default, since feathering adds real
+  per-call cost (two extra full-size canvases per segment) that's
+  negligible once per keyframe but would add up across an entire clip's
+  frames. Verified visually with a synthetic worst-case stress test (a
+  striped reference texture bent sharply at a simulated elbow, viewed with
+  Playwright) — feathering measurably softens the boundary, but a real
+  limitation remains and is worth being explicit about: it blends *how* the
+  two segments meet, not *what* they contain, so when the reference image's
+  own pose is very different from the target frame's pose (e.g. a generic
+  standing anatomy image bent into a deep hip-hinge), the content on each
+  side of a joint can still genuinely mismatch — the seam becomes soft
+  rather than crisp, but the underlying content discontinuity a purely
+  rigid, independently-transformed-per-limb warp can't fully erase. The
+  most reliable way to avoid this ceiling entirely is the workflow Anatomy
+  Keyframes mode is built around: download the exact frame, generate an
+  anatomy image for *that specific pose* externally (ChatGPT/Sora/etc.),
+  and upload it back for that keyframe — a pose-matched reference image
+  needs little to no per-limb bending in the first place, so there's no
+  cross-joint content mismatch to hide.
 - **The offline chat mock has narrow language understanding** (English
   regex patterns only) — it's there so the mechanism is testable without an
   API key, not as a substitute for the real model. Add `OPENAI_API_KEY` for

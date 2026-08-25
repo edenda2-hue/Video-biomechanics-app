@@ -214,14 +214,32 @@ export function computeSegmentTransforms(
 }
 
 /**
- * Renders one continuous-mode output frame: warps every resolvable bone
- * segment of the reference anatomy image onto `targetSize` by its own rigid
- * transform (`computeSegmentTransforms`), clipped to that segment's capsule
- * region (`capsulePolygon`, computed in the reference image's own
- * coordinates from `refPose`), painted in `BONE_SEGMENTS` order (torso
- * first, then limbs, extremities and head last) so overlaps at joints look
- * layered rather than torn. A segment whose four endpoints aren't all
- * confidently detected is simply skipped for that frame.
+ * Renders one puppet frame: warps every resolvable bone segment of the
+ * reference anatomy image onto `targetSize` by its own rigid transform
+ * (`computeSegmentTransforms`), clipped to that segment's capsule region
+ * (`capsulePolygon`, computed in the reference image's own coordinates from
+ * `refPose`), painted in `BONE_SEGMENTS` order (torso first, then limbs,
+ * extremities and head last) so overlaps at joints look layered rather than
+ * torn. A segment whose four endpoints aren't all confidently detected is
+ * simply skipped for that frame.
+ *
+ * `featherPx` (default 0, hard edges) controls how segment boundaries blend:
+ * at 0, each segment is drawn with `ctx.clip()` and fully overwrites
+ * whatever was already painted in the overlap zone with the next segment —
+ * cheap (this is the per-*frame* path for continuous mode, run many times
+ * per export), but since two adjacent segments (e.g. upper arm and forearm
+ * at the elbow) are independently rigid-transformed, their content doesn't
+ * necessarily line up pixel-for-pixel at the shared boundary, and a hard
+ * clip edge there reads as a visible seam/kink in the muscle texture right
+ * at the joint. A positive `featherPx` instead renders each segment onto
+ * its own canvas, masked by a *blurred* copy of its capsule shape, and
+ * alpha-composites that over the result (`source-over`) rather than
+ * replacing it outright — the two segments blend smoothly across the
+ * overlap zone instead of cutting hard at one boundary. This is real extra
+ * work (two full-size temp canvases per segment) so it's opt-in, used only
+ * by the one-time static fit (`anatomyFit.ts`, a single render per
+ * keyframe/session) where the cost is negligible, not the continuous-mode
+ * per-frame path where it would add up across an entire clip's frames.
  */
 export function renderSkeletalPuppetFrameFromPoses(
   refImage: CanvasImageSource,
@@ -230,6 +248,7 @@ export function renderSkeletalPuppetFrameFromPoses(
   refSize: { width: number; height: number },
   targetSize: { width: number; height: number },
   minConfidence = 0.3,
+  featherPx = 0,
 ): HTMLCanvasElement {
   const refByPart = new Map(refPose.map((k) => [k.part, k]));
   const transforms = computeSegmentTransforms(refPose, tgtPose, refSize, targetSize, minConfidence);
@@ -251,15 +270,52 @@ export function renderSkeletalPuppetFrameFromPoses(
     const boneLen = Math.hypot(b.x - a.x, b.y - a.y) || 1;
     const poly = capsulePolygon(a, b, boneLen * seg.widthFactor, boneLen * seg.overlapFactor);
 
-    ctx.save();
-    ctx.setTransform(t.a, t.b, t.c, t.d, t.tx, t.ty);
-    ctx.beginPath();
-    ctx.moveTo(poly[0].x, poly[0].y);
-    for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
-    ctx.closePath();
-    ctx.clip();
-    ctx.drawImage(refImage, 0, 0, refSize.width, refSize.height);
-    ctx.restore();
+    if (featherPx <= 0) {
+      ctx.save();
+      ctx.setTransform(t.a, t.b, t.c, t.d, t.tx, t.ty);
+      ctx.beginPath();
+      ctx.moveTo(poly[0].x, poly[0].y);
+      for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(refImage, 0, 0, refSize.width, refSize.height);
+      ctx.restore();
+      continue;
+    }
+
+    const segCanvas = document.createElement("canvas");
+    segCanvas.width = targetSize.width;
+    segCanvas.height = targetSize.height;
+    const sctx = segCanvas.getContext("2d")!;
+    sctx.setTransform(t.a, t.b, t.c, t.d, t.tx, t.ty);
+    sctx.drawImage(refImage, 0, 0, refSize.width, refSize.height);
+    sctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    // The capsule polygon is defined in reference-image space; transform
+    // each vertex into target/canvas space (the same `t` used to warp the
+    // image above) before painting the mask, so the blurred mask lines up
+    // with the warped content it's meant to clip.
+    const maskCanvas = document.createElement("canvas");
+    maskCanvas.width = targetSize.width;
+    maskCanvas.height = targetSize.height;
+    const mctx = maskCanvas.getContext("2d")!;
+    mctx.filter = `blur(${featherPx}px)`;
+    mctx.fillStyle = "white";
+    mctx.beginPath();
+    const p0 = applyTransform(t, poly[0]);
+    mctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < poly.length; i++) {
+      const p = applyTransform(t, poly[i]);
+      mctx.lineTo(p.x, p.y);
+    }
+    mctx.closePath();
+    mctx.fill();
+
+    sctx.globalCompositeOperation = "destination-in";
+    sctx.drawImage(maskCanvas, 0, 0);
+    sctx.globalCompositeOperation = "source-over";
+
+    ctx.drawImage(segCanvas, 0, 0);
   }
   return canvas;
 }

@@ -78,7 +78,15 @@ export function fitAnatomyToPose(
   if (rawPose.length > 0) {
     const segments = computeSegmentTransforms(rawPose, targetPose, rawSize, targetSize);
     if (segments.size >= PUPPET_MIN_SEGMENTS) {
-      const puppetCanvas = renderSkeletalPuppetFrameFromPoses(rawImage, rawPose, targetPose, rawSize, targetSize);
+      // This fit runs once per keyframe/session (not per output video
+      // frame, unlike the continuous-mode puppet path), so it can afford
+      // the extra cost of soft-edged segment blending — see
+      // renderSkeletalPuppetFrameFromPoses's doc comment for why a hard
+      // clip edge between two independently-warped segments (e.g. upper
+      // arm and forearm at the elbow) can look like a seam right at the
+      // joint even when both segments individually fit well.
+      const featherPx = Math.max(3, Math.min(16, targetSize.width * 0.008));
+      const puppetCanvas = renderSkeletalPuppetFrameFromPoses(rawImage, rawPose, targetPose, rawSize, targetSize, 0.3, featherPx);
       const gapsFilled = segments.size < BONE_SEGMENTS.length;
       if (gapsFilled) {
         // Missing segments (most often a hand or foot) are left fully
