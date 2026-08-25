@@ -751,6 +751,40 @@ change.
   hand confidently detected but left far from its own raised wrist).
   Segments this rejects are routed through the same whole-image-fit
   fallback unresolved segments already get.
+- **The person-segmentation model itself was dropping raised/extended limbs
+  from the mask almost entirely.** Not a warp or pose-detection issue — a
+  separate, more fundamental one, found only by testing against a real
+  photo end-to-end rather than reasoning from code. `selfie_segmenter` (the
+  model previously used for both the single-freeze/keyframes mask and
+  continuous mode's per-frame mask tracking) is built for close-up,
+  front-facing "selfie" framing — background blur/replace use cases where
+  the subject fills most of the frame with limbs held close to the body.
+  Run directly against a real exercise photo (arms raised overhead gripping
+  a barbell, full body, mid-distance — exactly this app's actual use case),
+  it produced a mask that was missing the entire raised-arm silhouette
+  almost completely, and gave the shoes a uniform ~50%-confidence blob
+  instead of a clean included/excluded boundary. Both are individually
+  sufficient to explain "the anatomy doesn't sit right" reports: a
+  masked-out arm can't receive the anatomy overlay at all, however good the
+  pose detection and warp are (verified separately, via an identical-image
+  control test, to have zero bugs of their own — using the same real photo
+  as both the target frame and the anatomy reference, which should produce
+  a geometrically perfect reconstruction and did); and a partial-confidence
+  shoe region blends a ghostly partial overlay right at the ankle instead
+  of a clean cut, matching artifacts seen in a real export. Switched both
+  `cv/segmentation.ts` and `cv/videoMaskTrack.ts` to
+  `selfie_multiclass_256x256`, a multi-class model (background/hair/
+  body-skin/face-skin/clothes/other) that doesn't share the close-up-framing
+  assumption; "person" is hair+body-skin+face-skin+clothes summed,
+  excluding background and non-person "other" objects (a gripped barbell,
+  in the same test photo, correctly fell into "other" and was excluded
+  either way). Verified with the actual production `segmentPerson()`
+  function against the real photo (not just the isolated model comparison):
+  the raised arm is now fully covered, and — using a saturated placeholder
+  color instead of a real anatomy image specifically so mask coverage is
+  unambiguous in a screenshot — a full keyframes export was driven
+  end-to-end through a real browser and confirmed the overlay now reaches
+  the hands, with the shoes staying a clean, un-ghosted boundary.
 - **The offline chat mock has narrow language understanding** (English
   regex patterns only) — it's there so the mechanism is testable without an
   API key, not as a substitute for the real model. Add `OPENAI_API_KEY` for

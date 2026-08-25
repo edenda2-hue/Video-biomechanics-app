@@ -7,9 +7,15 @@
 import { FilesetResolver, ImageSegmenter } from "@mediapipe/tasks-vision";
 import { resizeMaskBuffer } from "./maskBuffer";
 
+// See cv/segmentation.ts's MODEL_URL comment: selfie_segmenter (previously
+// used here too) dropped a raised/extended arm from the mask almost
+// entirely and gave shoes a uniform partial-confidence blob instead of a
+// clean boundary, verified directly against a real exercise photo.
+// selfie_multiclass_256x256 doesn't share that close-up-framing assumption.
 const MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite";
+  "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite";
 const WASM_BASE = "/mediapipe-wasm";
+const PERSON_CLASSES = [1, 2, 3, 4]; // hair, body-skin, face-skin, clothes (0 = background, 5 = other)
 
 let videoSegmenterPromise: Promise<ImageSegmenter> | null = null;
 
@@ -71,13 +77,21 @@ export async function trackMaskAcrossVideo(
     lastTimestampMs = timestampMs;
 
     const result = segmenter.segmentForVideo(video, timestampMs);
-    const confidence = result.confidenceMasks?.[0];
-    if (!confidence) {
+    const masks = result.confidenceMasks;
+    if (!masks || masks.length <= Math.max(...PERSON_CLASSES)) {
       results.push({ tSec, mask: null, width: targetWidth, height: targetHeight });
     } else {
-      const raw = confidence.getAsFloat32Array();
-      const resized = resizeMaskBuffer(raw, confidence.width, confidence.height, targetWidth, targetHeight);
-      confidence.close();
+      const mw = masks[0].width;
+      const mh = masks[0].height;
+      const personArrays = PERSON_CLASSES.map((idx) => masks[idx].getAsFloat32Array());
+      const raw = new Float32Array(mw * mh);
+      for (let p = 0; p < raw.length; p++) {
+        let person = 0;
+        for (const arr of personArrays) person += arr[p];
+        raw[p] = Math.min(1, person);
+      }
+      const resized = resizeMaskBuffer(raw, mw, mh, targetWidth, targetHeight);
+      masks.forEach((m) => m.close());
       results.push({ tSec, mask: resized, width: targetWidth, height: targetHeight });
     }
     onProgress?.((i + 1) / sampleTimes.length);
