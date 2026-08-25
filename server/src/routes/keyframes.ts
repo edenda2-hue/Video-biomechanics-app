@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import { buildFreezeSequence, verticalBoundsFromPose } from "../lib/compositing.js";
 import { assembleMultiFreezeVideo, encodeImageSequence, extractFrame, type MultiFreezeKeyframeSegment } from "../lib/ffmpeg.js";
 import { getJob, setJob } from "../lib/exportJobs.js";
+import { releaseMemory } from "../lib/memory.js";
 import { requireSession, sessionDir, updateSession, HttpError } from "../lib/storage.js";
 import type { Keyframe, PoseKeypoint } from "../types.js";
 
@@ -229,6 +230,10 @@ keyframesRouter.post("/sessions/:id/keyframes/export", (req, res, next) => {
               }),
           );
 
+          // Compositing for this keyframe is done; release its raw-image
+          // buffers before ffmpeg spawns and needs its own headroom.
+          releaseMemory();
+
           const segmentPath = path.join(dir, `keyframe_${kf.id}_segment.mp4`);
           const expectedSeqFrames = Math.round(metadata.fps * kf.holdDurationSec);
           await encodeImageSequence(path.join(seqDir, "frame_%05d.png"), metadata.fps, segmentPath, {
@@ -242,6 +247,11 @@ keyframesRouter.post("/sessions/:id/keyframes/export", (req, res, next) => {
           });
 
           segments.push({ timeSec: kf.timeSec, segmentPath, holdDurationSec: kf.holdDurationSec });
+          // Each keyframe allocates several full-resolution raw-image
+          // buffers; on the free tier's tight memory ceiling, waiting on
+          // V8's own GC heuristics before starting the next keyframe risks
+          // peak usage growing across keyframes instead of staying flat.
+          releaseMemory();
         }
 
         const outPath = path.join(dir, "keyframes_export.mp4");

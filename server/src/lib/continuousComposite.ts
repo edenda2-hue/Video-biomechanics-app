@@ -15,6 +15,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { blendFrame } from "./compositing.js";
 import { extractFrame } from "./ffmpeg.js";
+import { releaseMemory } from "./memory.js";
 
 export interface ContinuousFrameInput {
   /** Timestamp within the source video this frame corresponds to. */
@@ -68,6 +69,12 @@ export async function buildContinuousSequence(
 
     index++;
     onProgress?.(index / frames.length);
+    // Each iteration allocates several full-resolution raw-image buffers;
+    // on the free tier's tight memory ceiling, a long continuous range
+    // risks peak usage climbing across frames instead of staying flat if
+    // it waits on V8's own GC heuristics. A full GC pass has real cost, so
+    // this runs every 10 frames rather than every single one.
+    if (index % 10 === 0) releaseMemory();
   }
 
   return { frameCount: frames.length, width, height };

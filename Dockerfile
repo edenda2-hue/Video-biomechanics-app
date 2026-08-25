@@ -20,4 +20,8 @@ ENV NODE_ENV=production
 ENV WEB_DIST_PATH=/app/web/dist
 
 EXPOSE 10000
-CMD ["node", "server/dist/index.js"]
+# --expose-gc: the export routes call global.gc() between heavy phases
+# (each keyframe's compositing, each video's continuous sequence) to
+# encourage prompt release of large raw-image buffers rather than waiting
+# on V8's own heuristics — meaningful headroom on the free tier's ~512MB.
+CMD ["node", "--expose-gc", "server/dist/index.js"]

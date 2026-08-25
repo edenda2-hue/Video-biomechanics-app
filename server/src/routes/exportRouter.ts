@@ -3,6 +3,7 @@ import { Router } from "express";
 import { buildFreezeSequence, verticalBoundsFromPose } from "../lib/compositing.js";
 import { assembleFinalVideo, encodeImageSequence } from "../lib/ffmpeg.js";
 import { getJob, setJob } from "../lib/exportJobs.js";
+import { releaseMemory } from "../lib/memory.js";
 import { requireSession, sessionDir, updateSession, HttpError } from "../lib/storage.js";
 
 export const exportRouter = Router();
@@ -102,6 +103,10 @@ exportRouter.post("/sessions/:id/export", (req, res, next) => {
               message: "Compositing the anatomy transition frames…",
             }),
         );
+
+        // Compositing is done; release its raw-image buffers before ffmpeg
+        // spawns and needs its own headroom on the free tier's tight limit.
+        releaseMemory();
 
         const freezeSegmentPath = path.join(dir, "freeze_segment.mp4");
         const expectedSeqFrames = Math.round(metadata.fps * freezeDurationSec);

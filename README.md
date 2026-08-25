@@ -476,6 +476,44 @@ network access to the model CDN.
   `node server/scripts/responsiveness-stress.mjs`.
 - `npm run typecheck` (root) typechecks both packages.
 
+## Memory on the free tier
+
+Render's free plan caps memory at roughly 512MB, and a real (not tiny
+test-fixture) photo/video frame's raw RGBA buffers, held across a multi-
+keyframe export, are a real contributor — a repeated silent instance
+restart (`Instance failed: ... status 137` in Render's Events tab, which
+is Linux's OOM killer) on a real export was traced to exactly this.
+Alongside the native-compositing fix above, three targeted changes reduce
+peak memory rather than just working around it:
+
+- `server/src/index.ts` calls `sharp.cache(false)` and `sharp.concurrency(1)`
+  at startup — sharp/libvips' default operation cache and internal thread
+  pool are tuned for throughput on machines that can spare tens of extra
+  MB and multiple concurrent native threads per operation; neither is
+  needed here (one frame processed at a time, sequentially), so both are
+  disabled to stop them competing with Node's own buffers for the same
+  tight ceiling.
+- The `Dockerfile` starts Node with `--expose-gc`, and `server/src/lib/
+  memory.ts`'s `releaseMemory()` calls `global.gc()` between the heavy
+  phases that allocate large raw-image buffers (each keyframe's
+  compositing in `routes/keyframes.ts`, every 10 frames of a continuous
+  sequence in `lib/continuousComposite.ts`, and right before ffmpeg spawns
+  in `routes/exportRouter.ts`) — encouraging prompt release instead of
+  waiting on V8's own heuristics, which can let peak usage climb across
+  a multi-keyframe or multi-frame job instead of staying flat.
+- Video uploads already stream straight to disk (`multer.diskStorage` in
+  `middleware/upload.ts`) rather than buffering in memory, so a large
+  source video was never itself a contributor.
+
+These are reasoned, verified-not-to-regress-anything (the full smoke-test
+suite's pixel-diff assertions are unchanged) fixes for a real, reproduced
+symptom, but memory pressure on a 512MB free instance with a genuinely
+large real-world video is a fundamentally tighter constraint than this
+project's synthetic test fixtures exercise — if exports still fail on very
+large source videos, the Render dashboard's Metrics tab (memory graph) and
+Events tab (`Instance failed` entries) are the fastest way to confirm
+whether memory is still the limiting factor.
+
 ## Known limitations
 
 - **Alignment quality depends on pose detection succeeding on your uploaded

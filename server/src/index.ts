@@ -3,7 +3,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express from "express";
+import sharp from "sharp";
 import { DATA_DIR, PORT, SESSIONS_DIR } from "./config.js";
+
+// The free-tier deploy target has ~512MB RAM. sharp/libvips defaults are
+// tuned for throughput on machines that can spare it: an operation cache
+// (decoded-pixel-data cache, tens of MB) and an internal thread pool that
+// can multiply a single composite's peak memory. Neither is needed here —
+// each session processes one frame at a time, sequentially — so both are
+// disabled at startup to keep peak memory bounded rather than let sharp's
+// defaults quietly compete with Node's own buffers for the same tight limit.
+sharp.cache(false);
+sharp.concurrency(1);
 import { HttpError } from "./lib/storage.js";
 import { videoRouter } from "./routes/video.js";
 import { poseRouter } from "./routes/pose.js";
