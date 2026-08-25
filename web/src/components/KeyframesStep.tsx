@@ -13,6 +13,7 @@ import { DEFAULT_MANUAL_ADJUST, fitAnatomyToPose, type AnatomyFitInfo, type Manu
 import { useJobPolling } from "../hooks/useJobPolling";
 import { detectPose } from "../cv/pose";
 import { segmentPerson } from "../cv/segmentation";
+import AnatomyAligner from "./AnatomyAligner";
 import type { PoseKeypoint, TransitionStyle, VideoMetadata } from "../types";
 
 const PHASE_LABEL: Record<ExportJobStatus["phase"], string> = {
@@ -67,13 +68,23 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
   const [exportBusy, setExportBusy] = useState(false);
   const { status, setStatus, error, setError, start: startPolling, stop: stopPolling } = useJobPolling(getKeyframesExportStatus);
   // Per-keyframe raw anatomy image + its own detected pose, kept around so
-  // the manual nudge sliders (offset/scale/rotate) can re-run the fit
-  // without needing the file re-uploaded — mirrors EditStep.tsx's
+  // the alignment step (and re-opening it later to adjust again) can re-run
+  // the fit without needing the file re-uploaded — mirrors EditStep.tsx's
   // rawAnatomyImgRef/rawAnatomySizeRef/uploadedPoseRef, just keyed per
   // keyframe since there can be several independent anatomy images here.
   const rawAnatomyRef = useRef<Map<string, { img: HTMLImageElement; rawSize: { width: number; height: number }; rawPose: PoseKeypoint[] }>>(
     new Map(),
   );
+  // Loaded frame images, kept around so re-opening the aligner doesn't
+  // re-fetch the frame over the network every time.
+  const frameImgRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  // The auto-fit anatomy layer (already warped to the frame at identity
+  // manual adjust) + starting manual adjust for whichever keyframe's
+  // aligner is currently open.
+  const alignerBaseRef = useRef<Map<string, { frameImg: HTMLImageElement; baseCanvas: HTMLCanvasElement; initialAdjust: ManualAdjust }>>(
+    new Map(),
+  );
+  const [aligningKfId, setAligningKfId] = useState<string | null>(null);
 
   useEffect(() => {
     const url = URL.createObjectURL(file);
@@ -98,6 +109,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
       const framePose = await detectPose(img);
       const maskDataUrl = await segmentPerson(img, frameSize.width, frameSize.height);
       await submitKeyframePose(sessionId, id, framePose, maskDataUrl);
+      frameImgRef.current.set(id, img);
 
       setKeyframes((kfs) =>
         [
@@ -140,9 +152,36 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
       const rawSize = { width: img.naturalWidth, height: img.naturalHeight };
       const rawPose = await detectPose(img).catch(() => [] as PoseKeypoint[]);
       rawAnatomyRef.current.set(kf.id, { img, rawSize, rawPose });
+      await openAligner(kf, DEFAULT_MANUAL_ADJUST);
+    } catch (e) {
+      patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
 
-      await rewarpAndUpload(kf.id, kf.framePose, kf.frameSize, DEFAULT_MANUAL_ADJUST);
-      patchKeyframe(kf.id, { busy: false });
+  /**
+   * Computes the auto-fit anatomy layer (puppet-warped or rigid, whatever
+   * fitAnatomyToPose picks, at identity manual adjust) for one keyframe and
+   * opens the large touch-drag/pinch alignment surface on top of it —
+   * that's the primary way alignment gets corrected now: the user drags and
+   * pinches the anatomy layer directly onto the frame below it and confirms,
+   * rather than nudging small numeric sliders blind to what they're actually
+   * doing.
+   */
+  async function openAligner(kf: KeyframeEntry, initialAdjust: ManualAdjust) {
+    if (!kf.framePose || !kf.frameSize) return;
+    const raw = rawAnatomyRef.current.get(kf.id);
+    if (!raw) return;
+    patchKeyframe(kf.id, { busy: true, error: null });
+    try {
+      let frameImg = frameImgRef.current.get(kf.id);
+      if (!frameImg) {
+        frameImg = await loadImage(kf.frameUrl);
+        frameImgRef.current.set(kf.id, frameImg);
+      }
+      const { canvas, info } = fitAnatomyToPose(raw.img, raw.rawPose, raw.rawSize, kf.framePose, kf.frameSize, DEFAULT_MANUAL_ADJUST);
+      alignerBaseRef.current.set(kf.id, { frameImg, baseCanvas: canvas, initialAdjust });
+      patchKeyframe(kf.id, { busy: false, matchInfo: info });
+      setAligningKfId(kf.id);
     } catch (e) {
       patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
     }
@@ -150,38 +189,35 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
 
   /**
    * Re-runs the fit for one keyframe's already-uploaded anatomy image
-   * against the given manual nudge, then re-uploads the result. Mirrors
-   * EditStep.tsx's rewarpAndUpload — the counterpart that lets a user
-   * correct a fit the automatic pose/segment matching didn't get exactly
-   * right, which (unlike the single-freeze Edit screen) this mode had no
-   * way to do at all before: every keyframe here was 100% dependent on
-   * automatic detection, with no manual escape hatch when a joint (a hand
-   * gripping a barbell, say) is genuinely hard to place with confidence.
+   * against the given manual adjust (the result of the user's drag/pinch
+   * alignment), then uploads the result. Mirrors EditStep.tsx's
+   * rewarpAndUpload — the counterpart that lets a user correct a fit the
+   * automatic pose/segment matching didn't get exactly right, which
+   * (unlike the single-freeze Edit screen) this mode had no way to do at
+   * all before.
    */
   async function rewarpAndUpload(kfId: string, framePose: PoseKeypoint[], frameSize: { width: number; height: number }, adjust: ManualAdjust) {
     const raw = rawAnatomyRef.current.get(kfId);
     if (!raw) return;
     const { canvas, info } = fitAnatomyToPose(raw.img, raw.rawPose, raw.rawSize, framePose, frameSize, adjust);
     const { imageUrl } = await uploadKeyframeAnatomy(sessionId, kfId, canvas.toDataURL("image/png"));
-    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, matchInfo: info });
+    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, matchInfo: info, adjust });
   }
 
-  // Debounced re-warp+upload whenever a keyframe's nudge sliders change (avoid spamming uploads while dragging).
-  const nudgeDebounce = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  function scheduleNudge(kf: KeyframeEntry, nextAdjust: ManualAdjust) {
-    patchKeyframe(kf.id, { adjust: nextAdjust });
-    const existing = nudgeDebounce.current.get(kf.id);
-    if (existing) clearTimeout(existing);
-    nudgeDebounce.current.set(
-      kf.id,
-      setTimeout(() => {
-        if (kf.framePose && kf.frameSize) {
-          rewarpAndUpload(kf.id, kf.framePose, kf.frameSize, nextAdjust).catch((e) =>
-            patchKeyframe(kf.id, { error: e instanceof Error ? e.message : String(e) }),
-          );
-        }
-      }, 300),
-    );
+  async function handleAlignerConfirm(kf: KeyframeEntry, adjust: ManualAdjust) {
+    setAligningKfId(null);
+    if (!kf.framePose || !kf.frameSize) return;
+    patchKeyframe(kf.id, { busy: true });
+    try {
+      await rewarpAndUpload(kf.id, kf.framePose, kf.frameSize, adjust);
+      patchKeyframe(kf.id, { busy: false });
+    } catch (e) {
+      patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  function handleAlignerCancel() {
+    setAligningKfId(null);
   }
 
   const timingDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -201,6 +237,9 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
       await deleteKeyframe(sessionId, kf.id);
       setKeyframes((kfs) => kfs.filter((k) => k.id !== kf.id));
       rawAnatomyRef.current.delete(kf.id);
+      frameImgRef.current.delete(kf.id);
+      alignerBaseRef.current.delete(kf.id);
+      if (aligningKfId === kf.id) setAligningKfId(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -268,7 +307,26 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
 
       {keyframes.length > 0 && (
         <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 16 }}>
-          {keyframes.map((kf) => (
+          {keyframes.map((kf) => {
+            const alignerData = alignerBaseRef.current.get(kf.id);
+            if (aligningKfId === kf.id && alignerData && kf.frameSize) {
+              return (
+                <div key={kf.id} className="card" style={{ margin: 0 }}>
+                  <p style={{ margin: "0 0 8px" }}>
+                    <strong>Aligning keyframe at {kf.timeSec.toFixed(2)}s</strong>
+                  </p>
+                  <AnatomyAligner
+                    frameImg={alignerData.frameImg}
+                    frameSize={kf.frameSize}
+                    anatomyBaseCanvas={alignerData.baseCanvas}
+                    initialAdjust={alignerData.initialAdjust}
+                    onConfirm={(adjust) => handleAlignerConfirm(kf, adjust)}
+                    onCancel={handleAlignerCancel}
+                  />
+                </div>
+              );
+            }
+            return (
             <div key={kf.id} className="card" style={{ margin: 0 }}>
               <div className="row" style={{ alignItems: "flex-start", gap: 16 }}>
                 <img src={kf.anatomyImageUrl ?? kf.frameUrl} alt="keyframe" style={{ width: 140, borderRadius: 8, border: "1px solid var(--border)" }} />
@@ -316,53 +374,10 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
                   {kf.error && <div className="error-box">{kf.error}</div>}
 
                   {kf.anatomyImageUrl && kf.frameSize && (
-                    <div className="row" style={{ marginTop: 12, flexWrap: "wrap" }}>
-                      <label className="muted">
-                        Anatomy position X
-                        <br />
-                        <input
-                          type="range"
-                          min={-kf.frameSize.width * 0.3}
-                          max={kf.frameSize.width * 0.3}
-                          value={kf.adjust.offsetX}
-                          onChange={(e) => scheduleNudge(kf, { ...kf.adjust, offsetX: Number(e.target.value) })}
-                        />
-                      </label>
-                      <label className="muted">
-                        Position Y
-                        <br />
-                        <input
-                          type="range"
-                          min={-kf.frameSize.height * 0.3}
-                          max={kf.frameSize.height * 0.3}
-                          value={kf.adjust.offsetY}
-                          onChange={(e) => scheduleNudge(kf, { ...kf.adjust, offsetY: Number(e.target.value) })}
-                        />
-                      </label>
-                      <label className="muted">
-                        Size
-                        <br />
-                        <input
-                          type="range"
-                          min={0.5}
-                          max={1.5}
-                          step={0.01}
-                          value={kf.adjust.scale}
-                          onChange={(e) => scheduleNudge(kf, { ...kf.adjust, scale: Number(e.target.value) })}
-                        />
-                      </label>
-                      <label className="muted">
-                        Rotate
-                        <br />
-                        <input
-                          type="range"
-                          min={-15}
-                          max={15}
-                          step={0.5}
-                          value={kf.adjust.rotationDeg}
-                          onChange={(e) => scheduleNudge(kf, { ...kf.adjust, rotationDeg: Number(e.target.value) })}
-                        />
-                      </label>
+                    <div className="row" style={{ marginTop: 12 }}>
+                      <button type="button" onClick={() => openAligner(kf, kf.adjust)} disabled={kf.busy}>
+                        Adjust alignment
+                      </button>
                     </div>
                   )}
 
@@ -427,7 +442,8 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

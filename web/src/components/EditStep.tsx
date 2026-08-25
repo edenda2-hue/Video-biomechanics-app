@@ -4,6 +4,7 @@ import { boundsCenter, verticalBounds } from "../cv/alignment";
 import { fitAnatomyToPose, type AnatomyFitInfo } from "../cv/anatomyFit";
 import { detectPose } from "../cv/pose";
 import { segmentPerson } from "../cv/segmentation";
+import AnatomyAligner from "./AnatomyAligner";
 import type { PoseKeypoint } from "../types";
 
 type Phase = "preparing-frame" | "need-anatomy" | "aligning" | "ready" | "error";
@@ -155,14 +156,33 @@ export default function EditStep({
     setAnatomyImageUrl(imageUrl);
   }
 
-  // Debounced re-warp+upload whenever the nudge sliders change (avoid spamming uploads while dragging).
-  const nudgeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function scheduleRewarp(nextAdjust: typeof DEFAULT_ADJUST) {
+  // Large touch-drag/pinch alignment surface, opened on demand instead of
+  // small nudge sliders — see AnatomyAligner's doc comment for why: no
+  // amount of slider-nudging beats the user directly dragging/pinching the
+  // anatomy layer onto the frame with their own eyes and hands.
+  const [alignerOpen, setAlignerOpen] = useState(false);
+  const alignerBaseRef = useRef<HTMLCanvasElement | null>(null);
+
+  function openAligner() {
+    const img = rawAnatomyImgRef.current;
+    const rawSize = rawAnatomySizeRef.current;
+    const targetPose = originalPoseRef.current;
+    if (!img || !rawSize || !targetPose || !frameSize) return;
+    const { canvas, info } = fitAnatomyToPose(img, uploadedPoseRef.current, rawSize, targetPose, frameSize, DEFAULT_ADJUST);
+    alignerBaseRef.current = canvas;
+    setMatchInfo(info);
+    setAlignerOpen(true);
+  }
+
+  async function handleAlignerConfirm(nextAdjust: typeof DEFAULT_ADJUST) {
+    setAlignerOpen(false);
     setAdjust(nextAdjust);
-    if (nudgeDebounce.current) clearTimeout(nudgeDebounce.current);
-    nudgeDebounce.current = setTimeout(() => {
-      if (frameSize) rewarpAndUpload(nextAdjust, frameSize).catch((e) => setError(e instanceof Error ? e.message : String(e)));
-    }, 300);
+    if (!frameSize) return;
+    try {
+      await rewarpAndUpload(nextAdjust, frameSize);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   // Build the "anatomy masked by silhouette" layer for the live preview whenever the anatomy image or mask changes.
@@ -561,50 +581,24 @@ export default function EditStep({
             </span>
           </div>
 
-          <div className="row" style={{ marginTop: 16, flexWrap: "wrap" }}>
-            <label className="muted">
-              Anatomy position X<br />
-              <input
-                type="range"
-                min={-frameSize.width * 0.3}
-                max={frameSize.width * 0.3}
-                value={adjust.offsetX}
-                onChange={(e) => scheduleRewarp({ ...adjust, offsetX: Number(e.target.value) })}
-              />
-            </label>
-            <label className="muted">
-              Position Y<br />
-              <input
-                type="range"
-                min={-frameSize.height * 0.3}
-                max={frameSize.height * 0.3}
-                value={adjust.offsetY}
-                onChange={(e) => scheduleRewarp({ ...adjust, offsetY: Number(e.target.value) })}
-              />
-            </label>
-            <label className="muted">
-              Size<br />
-              <input
-                type="range"
-                min={0.5}
-                max={1.5}
-                step={0.01}
-                value={adjust.scale}
-                onChange={(e) => scheduleRewarp({ ...adjust, scale: Number(e.target.value) })}
-              />
-            </label>
-            <label className="muted">
-              Rotate<br />
-              <input
-                type="range"
-                min={-15}
-                max={15}
-                step={0.5}
-                value={adjust.rotationDeg}
-                onChange={(e) => scheduleRewarp({ ...adjust, rotationDeg: Number(e.target.value) })}
-              />
-            </label>
+          <div className="row" style={{ marginTop: 16 }}>
+            <button type="button" onClick={openAligner}>
+              Adjust alignment
+            </button>
           </div>
+
+          {alignerOpen && alignerBaseRef.current && originalImgRef.current && (
+            <div style={{ marginTop: 16 }}>
+              <AnatomyAligner
+                frameImg={originalImgRef.current}
+                frameSize={frameSize}
+                anatomyBaseCanvas={alignerBaseRef.current}
+                initialAdjust={adjust}
+                onConfirm={handleAlignerConfirm}
+                onCancel={() => setAlignerOpen(false)}
+              />
+            </div>
+          )}
 
           <div className="row" style={{ marginTop: 16, flexWrap: "wrap" }}>
             <label className="muted">

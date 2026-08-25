@@ -57,9 +57,10 @@ point" on the Mode screen:
      transition (see below).
    - **Typeable controls** for the freeze point, hold duration, transition
      in/out speed, and trim start/end (the exported clip's range).
-   - Optional **manual nudge sliders** (position/size/rotation) for the
-     anatomy alignment, and an **AI chat** that can drive all of the above
-     from natural-language requests ("hold it 2 seconds longer", "move the
+   - An **"Adjust alignment" touch surface** (`AnatomyAligner.tsx`) for
+     correcting the fit by hand — see "Manual alignment" below — and an
+     **AI chat** that can drive timing/trim and nudge the alignment from
+     natural-language requests ("hold it 2 seconds longer", "move the
      anatomy right a bit", "trim the end to 8 seconds") — see below.
 4. **Export** — renders the final MP4, preserving original resolution/fps/
    aspect ratio/audio.
@@ -384,11 +385,14 @@ one image's geometric warp to cover the whole range of motion.
    preview) — feed it into ChatGPT/Sora/whatever externally for the most
    precise possible anatomy image, or skip this and upload any generic
    reference instead.
-3. **Upload the anatomy image** for that keyframe — it's fit to the
+3. **Upload the anatomy image** for that keyframe — it's auto-fit to the
    keyframe's specific pose the same way the single-freeze flow does
    (`web/src/cv/anatomyFit.ts`, shared by both): a full per-limb "skeletal
    puppet" warp when every bone segment resolves, falling back to a rigid
-   whole-image fit otherwise.
+   whole-image fit otherwise. The auto-fit result opens directly into the
+   touch alignment surface (see "Manual alignment" below) so you can drag
+   and pinch it exactly into place before it's confirmed and uploaded; you
+   can reopen it any time with the "Adjust alignment" button.
 4. **Head excluded, always.** Every keyframe's swap composites the body
    only — `server/src/lib/compositing.ts`'s `excludeHeadFromMask` zeroes a
    circular region around the head (sized from the head-to-neck distance in
@@ -420,6 +424,72 @@ single-freeze flow's canvas preview) — the exported video is the first
 time you see the composited result; keyframes' timestamps can't currently
 be moved after creation (delete and re-add instead); and like the other
 modes, it hasn't been tried against real reference footage yet.
+
+## Manual alignment: touch drag & pinch
+
+However good the automatic fit gets, it can never be perfect for a joint
+that's genuinely ambiguous in a 2D photo (occluded, gripping something,
+foreshortened) — pose models don't reliably flag that ambiguity as low
+confidence, so it can look confidently placed and still be wrong. The first
+attempt at a manual fix was a row of numeric sliders (offset X/Y, size,
+rotation), on both the single-freeze Edit screen and Anatomy Keyframes. That
+technically worked — dragging one did re-run the fit and re-upload — but
+it's the wrong shape of interface for what the task actually is: you're
+translating "the anatomy needs to move down and slightly left" into four
+abstract numbers with no direct connection to what you're looking at,
+instead of just moving it.
+
+Both screens now open a large "Adjust alignment" surface instead
+(`web/src/components/AnatomyAligner.tsx`) — a canvas showing the real frame
+with the anatomy layer drawn semi-transparently on top of it, dragged with
+one finger and resized/rotated with a two-finger pinch, exactly like
+positioning a sticker: what you do with your hands *is* the alignment, not
+a proxy for it.
+
+**What it shows.** The anatomy layer isn't the raw uploaded image — it's the
+same auto-fit result `fitAnatomyToPose` already computed (puppet-warped or
+rigid, whichever resolved), rendered into the frame's own pixel space at
+zero manual adjustment. So what you're nudging is already close, and what
+you see while dragging is pixel-identical to what confirming will produce,
+just with your adjustment composed on top — there's no separate "preview
+mode" that looks different from the real result.
+
+**The gesture math**, in `AnatomyAligner.tsx`:
+- Every active pointer (mouse, touch, pen — unified via the Pointer Events
+  API) is tracked in a `Map<pointerId, {x,y}>`. One active pointer = pan.
+  Two = pinch: scale is the ratio of current to starting finger distance,
+  rotation is the change in the angle between the two fingers, and the
+  translation is the delta of the two fingers' midpoint — so a pinch that
+  also drifts sideways scales, rotates, *and* pans in one continuous
+  gesture, the way a real "grab and reposition" motion naturally does.
+- Whenever the pointer count changes (a finger lands or lifts), the gesture
+  baseline resets from the *current* transform rather than the original one,
+  so lifting one finger mid-pinch and continuing to pan with the other
+  doesn't jump.
+- The result is composed with the exact same `composeManualAdjustment`
+  transform math the old sliders used (`web/src/cv/alignment.ts`) — this
+  is a new input method for an existing, already-tested transform pipeline,
+  not a new one.
+- Canvas coordinates are read via `getBoundingClientRect()` ratios rather
+  than assumed 1:1, so the math stays correct regardless of how the
+  responsive CSS scales the canvas down from its native pixel resolution.
+
+**Verified with real dispatched pointer events, not just by reasoning about
+the formulas.** A standalone Playwright harness rendered `AnatomyAligner` in
+isolation and dispatched actual `PointerEvent`s at known coordinates — a
+single-finger drag from (200,150) to (250,180), and a two-finger pinch from
+(150,150)/(250,150) to (100,100)/(300,200) — then read back the confirmed
+adjustment and checked it against the values worked out by hand
+(offset (50,30) for the pan; scale ×2.236, rotation +26.57° for the pinch,
+both matching the geometry of the finger positions used). Both matched
+exactly. This caught a real bug along the way: `setPointerCapture` throws
+`InvalidPointerId` for a pointer the browser doesn't consider "active,"
+which a synthetic (non-hardware) pointer never is — an uncaught throw there
+was silently discarding the rest of the pointer-down handler, so the second
+finger of a pinch was never recorded. Real touches don't hit this (they're
+always "active"), but the fix — wrapping the capture call in a `try/catch`,
+since capture is a UX nicety and not load-bearing for the tracking logic —
+is a real robustness improvement regardless of why it surfaced.
 
 ## Alternate: AI-generated anatomy (not in the primary flow)
 
@@ -685,8 +755,8 @@ change.
   was gripping the bar). Falls back to a pure whole-image fit only when
   segment detection is too sparse for the puppet to read as a coherent body
   at all (or a centered scale-to-fit placement when fewer than 3 joints
-  match). The nudge sliders/chat are always available for fine-tuning
-  regardless of which path was used.
+  match). The "Adjust alignment" touch surface and chat are always available
+  for fine-tuning regardless of which path was used.
 - **A hard-edged seam can appear at a bent joint even with a full 14/14
   puppet fit.** Each bone segment is independently rigid-transformed (its
   own reference-image crop, scaled/rotated/translated onto the target
@@ -800,27 +870,21 @@ change.
   `onChange` handler, so re-selecting the same file always fires the
   handler again.
 - **Anatomy Keyframes mode had no way to manually correct an imperfect
-  automatic fit.** When a specific joint is hard to place with confidence —
-  a hand gripping a barbell, occluded exactly like the case that motivated
-  the plausibility check above — some number of segments will always fall
-  back to the whole-image fit for that keyframe, no matter how good
-  automatic pose/segment detection gets; that's a real limit of what's
-  visible in a 2D photo, not a bug to keep chasing. The single-freeze Edit
-  screen already has a manual escape hatch for exactly this (offset/scale/
-  rotation nudge sliders, plus the AI chat), but Anatomy Keyframes mode had
-  none at all — every keyframe was 100% dependent on automatic detection
-  getting it right, with no way for the user to fix it themselves.
-  `KeyframesStep.tsx` now has the same nudge sliders per keyframe, mirroring
-  `EditStep.tsx`'s `rewarpAndUpload`/`scheduleRewarp` pattern: each
-  keyframe's raw anatomy image and its own detected pose are kept in a
-  `Map` (keyed by keyframe id, since — unlike the single-freeze flow —
-  there can be several independent anatomy images open at once), so
-  dragging a slider re-runs `fitAnatomyToPose` with the nudge applied and
-  re-uploads, without needing the file re-picked. Verified end-to-end
-  (Playwright): the sliders render with the expected range (derived from
-  each keyframe's own frame size), and dragging one triggers exactly one
-  new anatomy upload after the debounce, confirming the fit actually
-  recomputes rather than just moving a slider that does nothing.
+  automatic fit, and once it did, small numeric sliders turned out to be the
+  wrong interface for it.** When a specific joint is hard to place with
+  confidence — a hand gripping a barbell, occluded exactly like the case
+  that motivated the plausibility check above — some number of segments
+  will always fall back to the whole-image fit for that keyframe, no matter
+  how good automatic pose/segment detection gets; that's a real limit of
+  what's visible in a 2D photo, not a bug to keep chasing. A first pass
+  added offset/scale/rotation nudge sliders to `KeyframesStep.tsx` (mirroring
+  `EditStep.tsx`'s pre-existing ones), verified to actually trigger a
+  re-fit+re-upload on drag — but sliders make you translate what you're
+  seeing into four independent numbers with no direct connection to the
+  image, which is a bad match for a task that's fundamentally "move this
+  thing until it sits on that thing." Both screens now open a large
+  touch-first alignment surface instead (`AnatomyAligner.tsx`) — see "Manual
+  alignment" below — with the sliders removed entirely.
 - **The offline chat mock has narrow language understanding** (English
   regex patterns only) — it's there so the mechanism is testable without an
   API key, not as a substitute for the real model. Add `OPENAI_API_KEY` for
