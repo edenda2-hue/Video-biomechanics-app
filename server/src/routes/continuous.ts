@@ -81,7 +81,7 @@ continuousRouter.post("/sessions/:id/continuous/export", (req, res, next) => {
         );
 
         const segmentPath = path.join(dir, "continuous_segment.mp4");
-        await encodeImageSequence(path.join(seqDir, "frame_%05d.png"), metadata.fps, segmentPath, {
+        await encodeImageSequence(path.join(seqDir, "frame_%05d.png"), metadata, segmentPath, {
           frameCount: sorted.length,
           onProgress: (fraction) =>
             setJob(key, {

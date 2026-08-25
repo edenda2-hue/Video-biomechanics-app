@@ -561,14 +561,43 @@ correctness (full smoke-test suite still passes; pixel-diff thresholds are
 comfortably satisfied, just with slightly different exact values than the
 `medium`-preset baseline).
 
-Whether this fully closes the gap on the user's actual real-world video is
-still unconfirmed as of this writing — unlike the Standard-plan upgrade,
-which was concretely verified via Render's own Events tab, this is
-reasoned from how libx264's presets work, not measured against the
-platform's real memory ceiling. If `over 2GB` recurs even with this
-change, the next real lever is bitrate itself (`estimateBitrate` in
-`lib/ffmpeg.ts` currently targets 8-40Mbps) — a genuine quality tradeoff
-that should be a conscious choice with the user, not a silent change.
+That prediction was checked against the platform, not just reasoned about:
+the very next real export after the `-preset veryfast` deploy still hit
+`Instance failed... Exited with status 137` (Render's Events tab) — an OOM
+kill during `encodeImageSequence`, which encodes at the source video's
+*native* resolution with no cap at all. This app's source videos are
+exercise clips shot on a phone, where 4K is a completely ordinary capture
+resolution; encoding (and, in the final splice, re-encoding the *entire*
+output video via ffmpeg's `concat` filter) at native 4K needs meaningfully
+more memory than 1080p regardless of preset — a decode/encode pass over 4x
+the pixels of 1080p.
+
+So resolution, not preset, was the real lever. `server/src/lib/ffmpeg.ts`
+now caps every encode/re-encode stage (`encodeImageSequence` and all three
+`assemble*Video` functions — they must all agree, since ffmpeg's `concat`
+filter requires every input to already share one resolution) at a 1080p
+pixel budget, never upscaling a smaller source. Since these source videos
+are very often shot portrait (phone, upright), the cap tracks the video's
+*long* dimension rather than blindly capping height — width for landscape,
+height for portrait — so a portrait 1080x1920 clip (already a normal, fine
+size) isn't hit any harder than an equivalent landscape one. Verified
+directly (not just inferred): a synthetic 3840x2160 source scales to
+1920x1080, a synthetic 2160x3840 portrait source scales to 1080x1920, and a
+2560x1440 source run through the *entire* pipeline — compositing at native
+resolution, `encodeImageSequence`, then `assembleContinuousVideo`'s
+concat+re-encode — produces a clean 1920x1080 output with no resolution
+mismatch at the concat step. This was an explicit, conscious quality
+tradeoff discussed with the user before implementing (not a silent
+change), given the app's overriding priority is a completed export over
+maximum resolution.
+
+Whether this closes the gap on the user's actual real-world video is still
+unconfirmed as of this writing. If `over 2GB`/status 137 recurs even with
+this change, the next real lever is bitrate itself (`estimateBitrate` in
+`lib/ffmpeg.ts` currently targets 8-40Mbps, now against the capped
+resolution rather than the source's native one) — again a real quality
+tradeoff that should stay a conscious choice with the user, not a silent
+change.
 
 ## Known limitations
 

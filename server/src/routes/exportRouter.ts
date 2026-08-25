@@ -110,7 +110,7 @@ exportRouter.post("/sessions/:id/export", (req, res, next) => {
 
         const freezeSegmentPath = path.join(dir, "freeze_segment.mp4");
         const expectedSeqFrames = Math.round(metadata.fps * freezeDurationSec);
-        await encodeImageSequence(path.join(seqDir, "frame_%05d.png"), metadata.fps, freezeSegmentPath, {
+        await encodeImageSequence(path.join(seqDir, "frame_%05d.png"), metadata, freezeSegmentPath, {
           frameCount: expectedSeqFrames,
           onProgress: (fraction) =>
             setJob(session.id, {

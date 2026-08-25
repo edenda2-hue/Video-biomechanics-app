@@ -27,6 +27,33 @@ const NICE_AVAILABLE = spawnSync("nice", ["--version"]).error === undefined;
 // app's encodes are bitrate- or storage-constrained, only memory-constrained.
 const ENCODE_PRESET = "veryfast";
 
+// Both compositing (sharp, native/non-blocking) and the preset change above
+// were confirmed insufficient on their own: a real export still hit "Ran
+// out of memory (used over 2GB)" (exit 137) during encodeImageSequence,
+// which encodes at the source video's native resolution with no cap. A
+// phone-shot source (4K is common) means 4x the pixels — and therefore
+// roughly 4x the decode/encode memory — of 1080p, regardless of preset.
+// Capping the *processing* resolution at 1080p (never upscaling smaller
+// sources) is a much bigger, more direct lever than the preset alone.
+// Applied consistently to every encode/re-encode stage: encodeImageSequence's
+// own segment encode (where the OOM above actually happened) and every
+// stream fed into the final concat in the three assemble* functions below,
+// since ffmpeg's concat filter requires all inputs to share one resolution.
+//
+// This app's source videos are exercise clips, very commonly shot upright on
+// a phone (portrait: height > width). Blindly capping *height* at 1080
+// regardless of orientation would take a portrait 1080x1920 source — already
+// a reasonable, unremarkable size — down to roughly 608x1080, a much bigger
+// quality cut than intended. Capping whichever dimension is the *long* one
+// (width for landscape/square, height for portrait) instead keeps the
+// pixel-count budget consistent across orientations. The quoting around
+// min(...) protects its internal comma from being parsed as a filter-chain
+// separator by ffmpeg's own filtergraph syntax (this is not a shell, so it's
+// ffmpeg's quoting rules, not the shell's).
+function scaleFilterFor(metadata: Pick<VideoMetadata, "orientation">): string {
+  return metadata.orientation === "portrait" ? "scale='min(1080,iw)':-2" : "scale=-2:'min(1080,ih)'";
+}
+
 function spawnFfmpeg(args: string[]): ChildProcessWithoutNullStreams {
   return NICE_AVAILABLE ? spawn("nice", ["-n", "10", "ffmpeg", ...args]) : spawn("ffmpeg", args);
 }
@@ -154,19 +181,21 @@ export async function extractFrame(videoPath: string, timeSec: number, outPngPat
 /** Encodes a numbered PNG sequence (frame_00000.png, ...) into a silent H.264 video segment. */
 export async function encodeImageSequence(
   seqGlobPattern: string,
-  fps: number,
+  metadata: Pick<VideoMetadata, "fps" | "orientation">,
   outPath: string,
   progress?: { frameCount: number; onProgress: (fraction: number) => void },
 ) {
   const args = [
     "-framerate",
-    String(fps),
+    String(metadata.fps),
     "-i",
     seqGlobPattern,
     "-c:v",
     "libx264",
     "-preset",
     ENCODE_PRESET,
+    "-vf",
+    scaleFilterFor(metadata),
     "-pix_fmt",
     "yuv420p",
     "-crf",
@@ -205,9 +234,9 @@ export async function assembleFinalVideo(opts: AssembleOptions, onProgress?: (fr
   const bitrate = estimateBitrate(metadata);
 
   const filters: string[] = [
-    `[0:v]trim=${trimStartSec}:${freezeSec},setpts=PTS-STARTPTS[v0]`,
-    `[1:v]setpts=PTS-STARTPTS[v1]`,
-    `[0:v]trim=${freezeSec}:${trimEndSec},setpts=PTS-STARTPTS[v2]`,
+    `[0:v]trim=${trimStartSec}:${freezeSec},setpts=PTS-STARTPTS,${scaleFilterFor(metadata)}[v0]`,
+    `[1:v]setpts=PTS-STARTPTS,${scaleFilterFor(metadata)}[v1]`,
+    `[0:v]trim=${freezeSec}:${trimEndSec},setpts=PTS-STARTPTS,${scaleFilterFor(metadata)}[v2]`,
     `[v0][v1][v2]concat=n=3:v=1:a=0[vout]`,
   ];
 
@@ -288,13 +317,13 @@ export async function assembleMultiFreezeVideo(opts: AssembleMultiFreezeOptions,
   const vLabels: string[] = [];
   let cursor = trimStartSec;
   keyframes.forEach((kf, i) => {
-    vFilters.push(`[0:v]trim=${cursor}:${kf.timeSec},setpts=PTS-STARTPTS[vo${i}]`);
+    vFilters.push(`[0:v]trim=${cursor}:${kf.timeSec},setpts=PTS-STARTPTS,${scaleFilterFor(metadata)}[vo${i}]`);
     vLabels.push(`[vo${i}]`);
-    vFilters.push(`[${i + 1}:v]setpts=PTS-STARTPTS[vf${i}]`);
+    vFilters.push(`[${i + 1}:v]setpts=PTS-STARTPTS,${scaleFilterFor(metadata)}[vf${i}]`);
     vLabels.push(`[vf${i}]`);
     cursor = kf.timeSec;
   });
-  vFilters.push(`[0:v]trim=${cursor}:${trimEndSec},setpts=PTS-STARTPTS[voLast]`);
+  vFilters.push(`[0:v]trim=${cursor}:${trimEndSec},setpts=PTS-STARTPTS,${scaleFilterFor(metadata)}[voLast]`);
   vLabels.push(`[voLast]`);
   vFilters.push(`${vLabels.join("")}concat=n=${vLabels.length}:v=1:a=0[vout]`);
 
@@ -372,9 +401,9 @@ export async function assembleContinuousVideo(opts: AssembleContinuousOptions, o
   const bitrate = estimateBitrate(metadata);
 
   const filters: string[] = [
-    `[0:v]trim=${trimStartSec}:${startSec},setpts=PTS-STARTPTS[v0]`,
-    `[1:v]setpts=PTS-STARTPTS[v1]`,
-    `[0:v]trim=${endSec}:${trimEndSec},setpts=PTS-STARTPTS[v2]`,
+    `[0:v]trim=${trimStartSec}:${startSec},setpts=PTS-STARTPTS,${scaleFilterFor(metadata)}[v0]`,
+    `[1:v]setpts=PTS-STARTPTS,${scaleFilterFor(metadata)}[v1]`,
+    `[0:v]trim=${endSec}:${trimEndSec},setpts=PTS-STARTPTS,${scaleFilterFor(metadata)}[v2]`,
     `[v0][v1][v2]concat=n=3:v=1:a=0[vout]`,
   ];
 

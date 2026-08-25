@@ -66,7 +66,7 @@ async function main() {
 
   console.log("4. encoding the sequence to a video segment...");
   const segmentPath = path.join(TMP, "segment.mp4");
-  await encodeImageSequence(path.join(seqDir, "frame_%05d.png"), FPS, segmentPath);
+  await encodeImageSequence(path.join(seqDir, "frame_%05d.png"), metadata, segmentPath);
 
   console.log("5. splicing the segment back into the source (assembleContinuousVideo)...");
   const outPath = path.join(TMP, "final.mp4");

@@ -236,7 +236,7 @@ keyframesRouter.post("/sessions/:id/keyframes/export", (req, res, next) => {
 
           const segmentPath = path.join(dir, `keyframe_${kf.id}_segment.mp4`);
           const expectedSeqFrames = Math.round(metadata.fps * kf.holdDurationSec);
-          await encodeImageSequence(path.join(seqDir, "frame_%05d.png"), metadata.fps, segmentPath, {
+          await encodeImageSequence(path.join(seqDir, "frame_%05d.png"), metadata, segmentPath, {
             frameCount: expectedSeqFrames,
             onProgress: (fraction) =>
               setJob(key, {
