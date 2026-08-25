@@ -2,7 +2,12 @@ services:
   - type: web
     name: video-biomechanics-app
     runtime: docker
-    plan: free
+    # Standard (2GB RAM / 1 CPU): the free tier's 512MB was confirmed (via
+    # Render's own Events tab — "Ran out of memory (used over 512MB)") to
+    # be insufficient for compositing real-resolution video frames, not
+    # just synthetic test fixtures. Pinned here so a future Blueprint sync
+    # doesn't silently reset the dashboard's manual upgrade back to free.
+    plan: standard
     dockerfilePath: ./Dockerfile
     envVars:
       # Leave unset to run in offline demo mode; add a real key later in the
