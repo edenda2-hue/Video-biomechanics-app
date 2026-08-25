@@ -404,15 +404,24 @@ To run the two halves separately instead: `npm run dev:server` and
 
 `Dockerfile` + `render.yaml` package the API and the built web app into a
 single container that serves both on one port, for a one-click deploy to
-[Render](https://render.com)'s free web-service tier (no credit card
-required; free instances sleep after 15 min idle and cold-start in
-30–60s on the next visit).
+[Render](https://render.com).
+
+`render.yaml` currently pins the **Standard** plan (2GB RAM / 1 CPU, paid).
+The free tier (512MB, no credit card required) technically works and is
+fine for trying the app on short synthetic clips, but was confirmed
+insufficient for real-resolution video — Render's own Events tab reported
+`Instance failed... Ran out of memory (used over 512MB)` during a real
+export even after the memory optimizations described below, so budget for
+the paid tier if you intend to actually export real footage. See "Memory
+on the free tier" below for the full story.
 
 1. Go to Render, sign in/sign up (GitHub login is easiest).
 2. New → Blueprint → connect the `edenda2-hue/Video-biomechanics-app`
    repo, branch `claude/biomechanics-video-analysis-qa3xmg`.
-3. Render reads `render.yaml` automatically and proposes one free web
-   service. Confirm.
+3. Render reads `render.yaml` automatically and proposes one web service on
+   the Standard plan (edit `render.yaml`'s `plan:` field first if you'd
+   rather start on `free` and upgrade later, or need a different tier).
+   Confirm; Render will ask for payment details for any paid plan.
 4. (Optional) In the service's Environment tab, add `OPENAI_API_KEY` to
    enable full natural-language understanding in the Edit screen's AI chat
    (cheap text-only calls) — without it, the chat falls back to a limited
@@ -421,7 +430,7 @@ required; free instances sleep after 15 min idle and cold-start in
 5. Wait for the build to finish, then open the `https://<name>.onrender.com`
    URL it gives you.
 
-Note: the free instance's disk is not persistent across restarts/redeploys —
+Note: disk is not persistent across restarts/redeploys on any plan —
 download your exported video promptly rather than relying on it staying on
 the server.
 
@@ -507,12 +516,18 @@ peak memory rather than just working around it:
 
 These are reasoned, verified-not-to-regress-anything (the full smoke-test
 suite's pixel-diff assertions are unchanged) fixes for a real, reproduced
-symptom, but memory pressure on a 512MB free instance with a genuinely
-large real-world video is a fundamentally tighter constraint than this
-project's synthetic test fixtures exercise — if exports still fail on very
-large source videos, the Render dashboard's Metrics tab (memory graph) and
-Events tab (`Instance failed` entries) are the fastest way to confirm
-whether memory is still the limiting factor.
+symptom — but they were not sufficient on their own. Even after all three
+were live, a real export against real photos still hit
+`Instance failed... Ran out of memory (used over 512MB)` in Render's
+Events tab. Memory pressure on a 512MB instance with genuinely large
+real-world video is a fundamentally tighter constraint than code-level
+buffer/cache tuning can close, since a meaningful share of it (ffmpeg's
+own encoding memory, running as a separate OS process) isn't something
+Node-side changes touch at all. **The deploy now runs on Render's
+Standard plan (2GB RAM)** for that reason — see "Deploying it" above.
+The Metrics tab (memory graph) and Events tab (`Instance failed` entries)
+remain the fastest way to confirm whether memory is the limiting factor if
+exports ever fail again on a very large source video.
 
 ## Known limitations
 
