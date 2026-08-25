@@ -41,18 +41,11 @@ point" on the Mode screen:
    confirm; the exact frame is extracted directly from the video (ffmpeg),
    never synthesized.
 3. **Edit** — one screen combining:
-   - **Anatomy upload + auto-fit**: upload an anatomical image — it doesn't
-     need to already match this frame's pose. The CV Engine (in-browser
-     pose estimation) detects joints in both images and, when every body
-     segment resolves, bends the anatomy image joint by joint
-     (`web/src/cv/limbWarp.ts`'s skeletal-puppet warp, the same mechanism
-     continuous mode below uses) to match this exact pose — so a generic
-     standing reference image ends up correctly bent for a squat, a
-     reach, a bent-over row, whatever the frame shows. When detection is
-     incomplete it falls back to a single whole-image scale/rotation/
-     position fit (robust to a few bad joint matches — see "outlier
-     rejection" below), which is what you'd want anyway for an image
-     already drawn to match this exact frame.
+   - **Anatomy upload + manual alignment**: upload an anatomical image — the
+     app never alters its content in any way. It starts out centered and
+     scaled to fit (pure geometry, no pose data), then you drag/pinch it
+     into place yourself with "Adjust alignment" — see "Manual alignment"
+     below for why this is fully manual rather than auto-fit.
    - A **live canvas preview** of the body-only head-to-foot "wipe"
      transition (see below).
    - **Typeable controls** for the freeze point, hold duration, transition
@@ -98,14 +91,16 @@ literally, not just as a prompt instruction:
 1. The confirmed frame is extracted directly from the source video (ffmpeg,
    `-i input -ss t -frames:v 1`) — never synthesized.
 2. The CV Engine produces a person/background segmentation mask for that
-   frame, and aligns your uploaded anatomy image onto it (`web/src/cv/alignment.ts`
-   fits a least-squares similarity transform — scale + rotation + translation
-   — from matched pose keypoints in both images). A single bad joint match
-   (common on stylized anatomical images) can badly skew a plain least-
-   squares fit, so the fit runs RANSAC first: every pair of candidate points
-   proposes a transform, the one with the most inliers wins, and the final
-   transform is refit over just that inlier set — unit-tested in
-   `web/scripts/test-alignment.ts`, including a case with corrupted points.
+   frame (used for compositing in step 3) and detects its pose (used for the
+   transition effects below — where the body's silhouette starts/ends). The
+   anatomy image itself is positioned by hand: it starts centered and scaled
+   to fit, and you drag/pinch it into place — see "Manual alignment" below
+   for the current UI and why it works this way, not an automatic pose fit.
+   (`web/src/cv/alignment.ts`'s RANSAC-robust similarity-transform fit,
+   `fitSimilarityTransform`, still exists and is still unit-tested in
+   `web/scripts/test-alignment.ts` — it's general reusable pose-fitting math,
+   just no longer wired into the anatomy-alignment UI after the auto-fit
+   removal described below.)
 3. For every frame of the transition, `lib/compositing.ts` computes
    `result = original*(1 - mask*alpha) + anatomy*(mask*alpha)`: the
    per-pixel `alpha` is computed in JS (cheap — one multiply per pixel),
@@ -385,14 +380,11 @@ one image's geometric warp to cover the whole range of motion.
    preview) — feed it into ChatGPT/Sora/whatever externally for the most
    precise possible anatomy image, or skip this and upload any generic
    reference instead.
-3. **Upload the anatomy image** for that keyframe — it's auto-fit to the
-   keyframe's specific pose the same way the single-freeze flow does
-   (`web/src/cv/anatomyFit.ts`, shared by both): a full per-limb "skeletal
-   puppet" warp when every bone segment resolves, falling back to a rigid
-   whole-image fit otherwise. The auto-fit result opens directly into the
-   touch alignment surface (see "Manual alignment" below) so you can drag
-   and pinch it exactly into place before it's confirmed and uploaded; you
-   can reopen it any time with the "Adjust alignment" button.
+3. **Upload the anatomy image** for that keyframe — it opens directly into
+   the touch alignment surface (see "Manual alignment" below), centered and
+   scaled to fit as a neutral starting point, unaltered otherwise; you drag
+   and pinch it exactly into place yourself before confirming, and can
+   reopen it any time with the "Adjust alignment" button.
 4. **Head excluded, always.** Every keyframe's swap composites the body
    only — `server/src/lib/compositing.ts`'s `excludeHeadFromMask` zeroes a
    circular region around the head (sized from the head-to-neck distance in
@@ -416,8 +408,10 @@ total duration; the head region stays close to the source pixel-for-pixel
 during a hold while the body region visibly shows the anatomy image;
 footage outside any keyframe's hold stays untouched) and with a real
 Playwright run through the actual UI (two keyframes, frame download links
-present, anatomy upload + auto-fit for each, hold-duration edit, export to
-a downloadable video).
+present, anatomy upload for each, hold-duration edit, export to a
+downloadable video) — from before the auto-fit removal described in "Manual
+alignment" below; the alignment UI's own gesture math was re-verified
+separately (see that section), not this end-to-end run.
 
 **Known limitations**: no live preview before export (unlike the
 single-freeze flow's canvas preview) — the exported video is the first
@@ -427,32 +421,53 @@ modes, it hasn't been tried against real reference footage yet.
 
 ## Manual alignment: touch drag & pinch
 
-However good the automatic fit gets, it can never be perfect for a joint
-that's genuinely ambiguous in a 2D photo (occluded, gripping something,
-foreshortened) — pose models don't reliably flag that ambiguity as low
-confidence, so it can look confidently placed and still be wrong. The first
-attempt at a manual fix was a row of numeric sliders (offset X/Y, size,
-rotation), on both the single-freeze Edit screen and Anatomy Keyframes. That
-technically worked — dragging one did re-run the fit and re-upload — but
-it's the wrong shape of interface for what the task actually is: you're
-translating "the anatomy needs to move down and slightly left" into four
-abstract numbers with no direct connection to what you're looking at,
-instead of just moving it.
+This app went through two rounds of alignment UI, both driven directly by
+user feedback, ending at a stricter place than either started: the app now
+performs **zero automatic reshaping or fitting** of the uploaded anatomy
+image. Whatever image you upload is composited pixel-for-pixel unchanged —
+only its position, size, and rotation are ever adjusted, and only by you.
 
-Both screens now open a large "Adjust alignment" surface instead
-(`web/src/components/AnatomyAligner.tsx`) — a canvas showing the real frame
-with the anatomy layer drawn semi-transparently on top of it, dragged with
-one finger and resized/rotated with a two-finger pinch, exactly like
-positioning a sticker: what you do with your hands *is* the alignment, not
-a proxy for it.
+**Round 1** replaced a row of numeric sliders (offset X/Y, size, rotation)
+with a large touch surface, because sliders are the wrong shape of interface
+for "move this until it sits on that": you're translating what you see into
+four abstract numbers instead of just moving it. At that point the anatomy
+layer being dragged was still the output of an automatic per-limb
+"skeletal-puppet" warp (`fitAnatomyToPose`, `web/src/cv/limbWarp.ts`) that
+bent the uploaded image joint-by-joint to match the target pose before the
+user ever touched it.
 
-**What it shows.** The anatomy layer isn't the raw uploaded image — it's the
-same auto-fit result `fitAnatomyToPose` already computed (puppet-warped or
-rigid, whichever resolved), rendered into the frame's own pixel space at
-zero manual adjustment. So what you're nudging is already close, and what
-you see while dragging is pixel-identical to what confirming will produce,
-just with your adjustment composed on top — there's no separate "preview
-mode" that looks different from the real result.
+**Round 2** removed that automatic warp entirely, after direct user
+feedback: uploading a specific image and having the app reshape its content
+— even with good intentions, even producing a *better-looking* result on
+average — isn't acceptable. The whole point of choosing a specific image is
+that the app shouldn't alter it. `fitAnatomyToPose`, the per-limb puppet
+warp, `fitSimilarityTransform`'s use for anatomy placement, and the
+`AnatomyFitInfo`/`matchInfo` "bent N of 14 segments" UI feedback are all
+gone from this flow (the skeletal-puppet *renderer* itself,
+`renderSkeletalPuppetFrameFromPoses`, is untouched and still used by
+continuous mode — a separate, automatic-tracking-across-a-video feature the
+user hasn't objected to). The only thing the system still computes is a
+neutral, pose-agnostic "center + scale to fit" starting placement
+(`centerFitTransform` — pure geometry from the two images' pixel
+dimensions, no pose data read at all) — the same thing any image viewer
+does when it opens a picture — and every pixel of adjustment past that
+starting point is the user's own gesture.
+
+Both the single-freeze Edit screen and Anatomy Keyframes open the same
+"Adjust alignment" surface (`web/src/components/AnatomyAligner.tsx`) — a
+canvas showing the real frame with the raw anatomy image drawn
+semi-transparently on top of it, dragged with one finger and
+resized/rotated with a two-finger pinch, exactly like positioning a
+sticker: what you do with your hands *is* the alignment, not a proxy for
+it, and not a starting point for an algorithm to refine further.
+
+**What it shows.** The anatomy layer is the exact uploaded image — not a
+canvas the app has drawn onto, not a warped copy — positioned via
+`centerFitTransform` (the neutral starting placement) composed with the
+user's own adjustment (`composeManualAdjustment`, unchanged from round 1).
+What you see while dragging is pixel-identical to what confirming will
+produce, just scaled down for display — there's no separate "preview mode"
+that looks different from the real result.
 
 **The gesture math**, in `AnatomyAligner.tsx`:
 - Every active pointer (mouse, touch, pen — unified via the Pointer Events
@@ -490,6 +505,15 @@ finger of a pinch was never recorded. Real touches don't hit this (they're
 always "active"), but the fix — wrapping the capture call in a `try/catch`,
 since capture is a UX nicety and not load-bearing for the tracking logic —
 is a real robustness improvement regardless of why it surfaced.
+
+Re-run after round 2 (raw image instead of a pre-baked canvas, base
+transform switched from identity to `centerFitTransform`), the same pan and
+pinch assertions still passed with identical expected values — confirming
+the manual-adjust math is genuinely independent of what the base layer is.
+A separate screenshot check with a tall, differently-proportioned test image
+(and a corner marker to catch any accidental flip) confirmed the initial
+center-fit placement itself: letterboxed and centered correctly, unwarped,
+right-side up, with no automatic transform applied beyond that.
 
 ## Alternate: AI-generated anatomy (not in the primary flow)
 
@@ -742,85 +766,52 @@ change.
 
 ## Known limitations
 
-- **Alignment quality depends on pose detection succeeding on your uploaded
-  image.** The per-limb skeletal-puppet fit engages once at least
-  `PUPPET_MIN_SEGMENTS` (7, about half) of the 14 body segments resolve
-  confidently — any segment that doesn't (a hand or foot is the most common
-  case, e.g. gripping a barbell or occluded inside a shoe) is filled in from
-  a whole-image rigid fit underneath the puppet layer rather than either
-  showing a transparent hole or discarding the per-limb warp for every
-  *other* segment (the original all-14-or-nothing gate did the latter, and
-  was directly responsible for a real deadlift keyframe getting a visibly
-  worse whole-image fit than a neighboring keyframe purely because one hand
-  was gripping the bar). Falls back to a pure whole-image fit only when
-  segment detection is too sparse for the puppet to read as a coherent body
-  at all (or a centered scale-to-fit placement when fewer than 3 joints
-  match). The "Adjust alignment" touch surface and chat are always available
-  for fine-tuning regardless of which path was used.
-- **A hard-edged seam can appear at a bent joint even with a full 14/14
-  puppet fit.** Each bone segment is independently rigid-transformed (its
-  own reference-image crop, scaled/rotated/translated onto the target
-  frame's bone) and painted with a hard `ctx.clip()` boundary that fully
-  overwrites whatever the previous segment painted in the overlap zone —
-  cheap, but since two adjacent segments' transforms generally differ (an
-  elbow or knee bent between the reference pose and the target pose), their
-  content doesn't necessarily line up pixel-for-pixel where they meet, and
-  a hard clip edge there can read as a visible seam/kink in the muscle
-  texture right at the joint. `renderSkeletalPuppetFrameFromPoses` (in
-  `web/src/cv/limbWarp.ts`) now accepts an optional `featherPx`: instead of
-  a hard clip, each segment renders onto its own canvas masked by a
-  *blurred* copy of its capsule shape and is alpha-composited
-  (`source-over`) rather than overwritten outright, so two segments blend
-  smoothly across their overlap zone instead of cutting hard at one
-  boundary. `anatomyFit.ts`'s one-time static fit (single-freeze/Anatomy
-  Keyframes) opts into this; continuous mode's per-*frame* puppet render
-  stays on the cheap hard-edge path by default, since feathering adds real
-  per-call cost (two extra full-size canvases per segment) that's
-  negligible once per keyframe but would add up across an entire clip's
-  frames. Verified visually with a synthetic worst-case stress test (a
-  striped reference texture bent sharply at a simulated elbow, viewed with
-  Playwright) — feathering measurably softens the boundary, but a real
-  limitation remains and is worth being explicit about: it blends *how* the
-  two segments meet, not *what* they contain, so when the reference image's
-  own pose is very different from the target frame's pose (e.g. a generic
-  standing anatomy image bent into a deep hip-hinge), the content on each
-  side of a joint can still genuinely mismatch — the seam becomes soft
-  rather than crisp, but the underlying content discontinuity a purely
-  rigid, independently-transformed-per-limb warp can't fully erase. The
-  most reliable way to avoid this ceiling entirely is the workflow Anatomy
-  Keyframes mode is built around: download the exact frame, generate an
-  anatomy image for *that specific pose* externally (ChatGPT/Sora/etc.),
-  and upload it back for that keyframe — a pose-matched reference image
-  needs little to no per-limb bending in the first place, so there's no
-  cross-joint content mismatch to hide.
-- **A confidently-wrong keypoint can produce a garbled patch, even using
-  the per-keyframe pose-matched workflow above.** Caught directly from a
-  real export (user-reported, screenshotted): a solid-color blob appeared
-  right where a hand should be, in a rep where that hand was gripping a
-  barbell from behind a weight plate — occluded in the source footage. Pose
-  models rarely signal "I can't see this" with a low confidence score for
-  an occluded joint; they tend to hallucinate a plausible-looking position
-  at moderate-to-high confidence instead, which passes the existing
-  confidence gate untouched. The same applies to the *reference* anatomy
-  image's own pose detection when it's a stylized/AI-generated illustration
-  the pose model wasn't trained on, not a photo. Either way, the resulting
-  transform can sample a completely unrelated region of the reference image
-  at an implausible scale. `computeSegmentTransforms` now checks each
-  resolved segment's bone length *in the target frame* against the torso's
-  (neck-pelvis) length in that same frame, via a generous `maxTorsoRatio`
-  per segment (e.g. a hand shouldn't span more than half the torso's own
-  length) — an earlier version of this check compared each segment's
-  ref->target *scale* to the others' instead, which sounded plausible but
-  broke on a real, legitimate case (an overhead arm swing legitimately
-  scales very differently from mostly-still legs in the same pose change),
-  caught by `web/scripts/test-limbwarp.ts` before it shipped. The
-  torso-relative length check doesn't care how the rest of the body or the
-  reference image moved, only whether this one bone's target length is
-  anatomically plausible relative to this person's own visible size, so it
-  doesn't share that failure mode — unit-tested with a dedicated case (a
-  hand confidently detected but left far from its own raised wrist).
-  Segments this rejects are routed through the same whole-image-fit
-  fallback unresolved segments already get.
+- **The single-freeze/Anatomy Keyframes flows do no automatic pose-based
+  fitting at all** (see "Manual alignment" above) — alignment quality there
+  is now purely a function of how carefully you position the image
+  yourself, not of pose-detection quality. The per-limb skeletal-puppet
+  warp, its gap-filling (`PUPPET_MIN_SEGMENTS`), and its optional
+  joint-seam feathering (`featherPx`) are all still real, tested code in
+  `web/src/cv/limbWarp.ts` — but the only caller left is continuous mode
+  below, which doesn't pass `featherPx` (hard-edged joints only, by
+  design — feathering's per-call cost was judged worth paying once per
+  keyframe but not once per output video frame), and doesn't do
+  gap-filling for an unresolved segment (that compositing step only ever
+  existed in the now-removed `fitAnatomyToPose`). So today, in this app,
+  neither gap-filling nor feathering is reachable from any user-facing
+  path — they're dormant capability, not active behavior; a hard-edged
+  seam at a bent joint is possible in continuous mode's puppet warp, full
+  stop, not a fallback case.
+- **A confidently-wrong keypoint can produce a garbled patch in continuous
+  mode's puppet warp.** Caught directly from a real export (user-reported,
+  screenshotted) back when this same warp engine was still also used by the
+  single-freeze/Keyframes flows: a solid-color blob appeared right where a
+  hand should be, in a rep where that hand was gripping a barbell from
+  behind a weight plate — occluded in the source footage. Pose models
+  rarely signal "I can't see this" with a low confidence score for an
+  occluded joint; they tend to hallucinate a plausible-looking position at
+  moderate-to-high confidence instead, which passes the existing confidence
+  gate untouched. The same applies to a reference anatomy image's own pose
+  detection when it's a stylized/AI-generated illustration the pose model
+  wasn't trained on, not a photo. Either way, the resulting transform can
+  sample a completely unrelated region of the reference image at an
+  implausible scale. `computeSegmentTransforms` (still exercised by
+  continuous mode on every output frame) checks each resolved segment's
+  bone length *in the target frame* against the torso's (neck-pelvis)
+  length in that same frame, via a generous `maxTorsoRatio` per segment
+  (e.g. a hand shouldn't span more than half the torso's own length) — an
+  earlier version of this check compared each segment's ref->target *scale*
+  to the others' instead, which sounded plausible but broke on a real,
+  legitimate case (an overhead arm swing legitimately scales very
+  differently from mostly-still legs in the same pose change), caught by
+  `web/scripts/test-limbwarp.ts` before it shipped. The torso-relative
+  length check doesn't care how the rest of the body or the reference image
+  moved, only whether this one bone's target length is anatomically
+  plausible relative to this person's own visible size, so it doesn't share
+  that failure mode — unit-tested with a dedicated case (a hand confidently
+  detected but left far from its own raised wrist). A segment this rejects
+  is simply left transparent in the puppet render, same as any other
+  unresolved segment.
 - **The person-segmentation model itself was dropping raised/extended limbs
   from the mask almost entirely.** Not a warp or pose-detection issue — a
   separate, more fundamental one, found only by testing against a real

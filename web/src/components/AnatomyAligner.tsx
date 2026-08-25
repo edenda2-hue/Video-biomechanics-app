@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent, type WheelEvent } from "react";
-import { composeManualAdjustment, IDENTITY_TRANSFORM } from "../cv/alignment";
-import { DEFAULT_MANUAL_ADJUST, type ManualAdjust } from "../cv/anatomyFit";
+import { composeManualAdjustment } from "../cv/alignment";
+import { centerFitTransform, DEFAULT_MANUAL_ADJUST, type ManualAdjust } from "../cv/anatomyFit";
 
 const MAX_DISPLAY_WIDTH = 720;
 const MIN_SCALE = 0.2;
@@ -22,8 +22,9 @@ interface GestureState {
 export interface AnatomyAlignerProps {
   frameImg: HTMLImageElement;
   frameSize: { width: number; height: number };
-  /** Anatomy image already auto-fit to frameSize at identity manual adjust (puppet-warped or rigid, whatever fitAnatomyToPose chose) — this is the layer the user drags/pinches into place, so what they see while dragging is exactly what the final export will contain plus their own nudge on top. */
-  anatomyBaseCanvas: HTMLCanvasElement;
+  /** The raw uploaded anatomy image, unmodified — the app never reshapes or re-renders its content, only positions it. */
+  anatomyImg: HTMLImageElement;
+  anatomySize: { width: number; height: number };
   initialAdjust: ManualAdjust;
   onConfirm: (adjust: ManualAdjust) => void;
   onCancel: () => void;
@@ -44,15 +45,16 @@ function clamp(v: number, lo: number, hi: number): number {
 
 /**
  * Large, touch-first alignment surface: the user drags (one finger) and
- * pinches (two fingers — scale and rotate together) the anatomy layer
- * directly onto the real frame underneath it, instead of describing the
- * correction through small numeric sliders. No automatic per-limb fit can
- * ever be perfect for a genuinely occluded joint (the model doesn't reliably
- * signal low confidence there) — this puts direct manual control front and
- * center as the primary way to get an exact match, rather than as a
- * secondary nudge on top of an algorithm the user has to fight.
+ * pinches (two fingers — scale and rotate together) the raw, unmodified
+ * anatomy image directly onto the real frame underneath it, instead of
+ * describing the correction through small numeric sliders or trusting an
+ * algorithm to reshape it automatically. The app never alters the uploaded
+ * image's content — the only thing it computes is a neutral, pose-agnostic
+ * "center + scale to fit" starting placement (`centerFitTransform`, pure
+ * geometry, no pose data), which the user's own gestures then take over
+ * from completely.
  */
-export default function AnatomyAligner({ frameImg, frameSize, anatomyBaseCanvas, initialAdjust, onConfirm, onCancel }: AnatomyAlignerProps) {
+export default function AnatomyAligner({ frameImg, frameSize, anatomyImg, anatomySize, initialAdjust, onConfirm, onCancel }: AnatomyAlignerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [adjust, setAdjust] = useState<ManualAdjust>(initialAdjust);
   const [opacity, setOpacity] = useState(0.65);
@@ -64,6 +66,7 @@ export default function AnatomyAligner({ frameImg, frameSize, anatomyBaseCanvas,
   const displayScale = displayW / frameSize.width;
   const pivotX = frameSize.width / 2;
   const pivotY = frameSize.height / 2;
+  const baseTransform = centerFitTransform(anatomySize, frameSize);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -72,7 +75,7 @@ export default function AnatomyAligner({ frameImg, frameSize, anatomyBaseCanvas,
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(frameImg, 0, 0, displayW, displayH);
 
-    const full = composeManualAdjustment(IDENTITY_TRANSFORM, adjust, { x: pivotX, y: pivotY });
+    const full = composeManualAdjustment(baseTransform, adjust, { x: pivotX, y: pivotY });
     ctx.save();
     ctx.globalAlpha = opacity;
     ctx.setTransform(
@@ -83,9 +86,9 @@ export default function AnatomyAligner({ frameImg, frameSize, anatomyBaseCanvas,
       full.tx * displayScale,
       full.ty * displayScale,
     );
-    ctx.drawImage(anatomyBaseCanvas, 0, 0);
+    ctx.drawImage(anatomyImg, 0, 0);
     ctx.restore();
-  }, [adjust, opacity, frameImg, anatomyBaseCanvas, displayW, displayH, displayScale, pivotX, pivotY]);
+  }, [adjust, opacity, frameImg, anatomyImg, baseTransform, displayW, displayH, displayScale, pivotX, pivotY]);
 
   function canvasPoint(e: PointerEvent<HTMLCanvasElement>): PointerPt {
     const canvas = canvasRef.current!;

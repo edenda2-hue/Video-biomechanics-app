@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { confirmFrame, sendChatEdit, setTimeline, submitPose, uploadAnatomyImage, type TimelineState } from "../api/client";
 import { boundsCenter, verticalBounds } from "../cv/alignment";
-import { fitAnatomyToPose, type AnatomyFitInfo } from "../cv/anatomyFit";
+import { placeAnatomyManually } from "../cv/anatomyFit";
 import { detectPose } from "../cv/pose";
 import { segmentPerson } from "../cv/segmentation";
 import AnatomyAligner from "./AnatomyAligner";
@@ -9,7 +9,6 @@ import type { PoseKeypoint } from "../types";
 
 type Phase = "preparing-frame" | "need-anatomy" | "aligning" | "ready" | "error";
 type ChatMsg = { role: "user" | "assistant"; text: string };
-type MatchInfo = AnatomyFitInfo;
 
 const DEFAULT_ADJUST = { offsetX: 0, offsetY: 0, scale: 1, rotationDeg: 0 };
 
@@ -39,7 +38,6 @@ export default function EditStep({
   const [originalPose, setOriginalPose] = useState<PoseKeypoint[] | null>(null);
   const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null);
 
-  const [matchInfo, setMatchInfo] = useState<MatchInfo | null>(null);
   const [adjust, setAdjust] = useState(DEFAULT_ADJUST);
   const [anatomyImageUrl, setAnatomyImageUrl] = useState<string | null>(null);
 
@@ -60,11 +58,6 @@ export default function EditStep({
 
   const rawAnatomyImgRef = useRef<HTMLImageElement | null>(null);
   const rawAnatomySizeRef = useRef<{ width: number; height: number } | null>(null);
-  const uploadedPoseRef = useRef<PoseKeypoint[]>([]);
-  // Mirrors `originalPose` state but updates synchronously, so rewarpAndUpload
-  // (called right after prepareFrame sets a new pose) never reads a stale
-  // value from before that state update has re-rendered.
-  const originalPoseRef = useRef<PoseKeypoint[] | null>(null);
 
   const originalImgRef = useRef<HTMLImageElement | null>(null);
   const maskedLayerRef = useRef<HTMLCanvasElement | null>(null);
@@ -93,7 +86,6 @@ export default function EditStep({
     const pose = await detectPose(img);
     const maskDataUrl = await segmentPerson(img, size.width, size.height);
     await submitPose(sessionId, pose, maskDataUrl);
-    originalPoseRef.current = pose;
     setOriginalPose(pose);
     setMaskVersion((v) => v + 1);
     setPhase(rawAnatomyImgRef.current ? "aligning" : "need-anatomy");
@@ -119,7 +111,6 @@ export default function EditStep({
       const img = await loadImage(url);
       rawAnatomyImgRef.current = img;
       rawAnatomySizeRef.current = { width: img.naturalWidth, height: img.naturalHeight };
-      uploadedPoseRef.current = await detectPose(img).catch(() => [] as PoseKeypoint[]);
       setAdjust(DEFAULT_ADJUST);
       await rewarpAndUpload(DEFAULT_ADJUST, frameSize);
       setPhase("ready");
@@ -130,26 +121,19 @@ export default function EditStep({
   }
 
   /**
-   * Fits the raw anatomy image onto `size` (the current frame's dimensions)
-   * against `originalPose`, then applies the manual nudge on top, and
-   * uploads the result. Prefers a full per-limb "skeletal puppet" warp
-   * (web/src/cv/limbWarp.ts — the same mechanism continuous mode uses) over
-   * a rigid whole-image fit whenever every bone segment can be resolved:
-   * that's what lets a *generic* standing anatomy image get bent to match
-   * this exact exercise pose, not just uniformly scaled/rotated/positioned
-   * onto it. Falls back to the rigid similarity fit (or a centered
-   * scale-to-fit) when the anatomy image's pose detection is incomplete —
-   * a partial puppet would leave visible gaps where unresolved limbs simply
-   * aren't drawn, which looks worse than a slightly-misaligned whole image.
+   * Renders the raw anatomy image onto `size` (the current frame's
+   * dimensions) at `manualAdjust` and uploads it. No pose matching, no
+   * reshaping — the uploaded image's content is never altered, only
+   * positioned (see anatomyFit.ts's doc comment for why: an automatic
+   * per-limb warp used to run here, removed after direct user feedback that
+   * any automatic reshaping of the uploaded image wasn't acceptable).
    */
   async function rewarpAndUpload(manualAdjust: typeof DEFAULT_ADJUST, size: { width: number; height: number }) {
     const img = rawAnatomyImgRef.current;
     const rawSize = rawAnatomySizeRef.current;
-    const targetPose = originalPoseRef.current;
-    if (!img || !rawSize || !targetPose) return;
+    if (!img || !rawSize) return;
 
-    const { canvas, info } = fitAnatomyToPose(img, uploadedPoseRef.current, rawSize, targetPose, size, manualAdjust);
-    setMatchInfo(info);
+    const canvas = placeAnatomyManually(img, rawSize, size, manualAdjust);
 
     const dataUrl = canvas.toDataURL("image/png");
     const { imageUrl } = await uploadAnatomyImage(sessionId, dataUrl);
@@ -161,16 +145,9 @@ export default function EditStep({
   // amount of slider-nudging beats the user directly dragging/pinching the
   // anatomy layer onto the frame with their own eyes and hands.
   const [alignerOpen, setAlignerOpen] = useState(false);
-  const alignerBaseRef = useRef<HTMLCanvasElement | null>(null);
 
   function openAligner() {
-    const img = rawAnatomyImgRef.current;
-    const rawSize = rawAnatomySizeRef.current;
-    const targetPose = originalPoseRef.current;
-    if (!img || !rawSize || !targetPose || !frameSize) return;
-    const { canvas, info } = fitAnatomyToPose(img, uploadedPoseRef.current, rawSize, targetPose, frameSize, DEFAULT_ADJUST);
-    alignerBaseRef.current = canvas;
-    setMatchInfo(info);
+    if (!rawAnatomyImgRef.current || !rawAnatomySizeRef.current || !frameSize) return;
     setAlignerOpen(true);
   }
 
@@ -502,9 +479,9 @@ export default function EditStep({
     <div className="card">
       <h2>4. Edit</h2>
       <p className="muted">
-        Upload an anatomical image — even a generic standing reference, not one made for this exact pose — and the app
-        bends it joint by joint to match this frame automatically. Then tune timing/trim, or just tell the chat what
-        to change.
+        Upload an anatomical image, then drag and pinch it into place yourself with "Adjust alignment" — the app never
+        alters the image, only positions it exactly where you put it. Then tune timing/trim, or just tell the chat
+        what to change.
       </p>
 
       {phase !== "preparing-frame" && (
@@ -545,19 +522,6 @@ export default function EditStep({
         </div>
       )}
 
-      {matchInfo && phase === "ready" && (
-        <p className="muted">
-          {matchInfo.mode === "puppet" &&
-            (matchInfo.gapsFilled
-              ? `Bent ${matchInfo.matched} of ${matchInfo.total} body segments to match this exact pose (the rest — usually a hand or foot — filled in from a whole-image fit).`
-              : `Bent every body segment (${matchInfo.matched}/${matchInfo.total}) to match this exact pose — works even with a generic standing anatomy image.`)}
-          {matchInfo.mode === "rigid" &&
-            `Auto-aligned as a whole image using ${matchInfo.matched} of ${matchInfo.total} detected joints (not enough segments matched for a full per-limb fit — use the sliders or chat to fine-tune).`}
-          {matchInfo.mode === "center" &&
-            "Couldn't reliably detect a pose in your image — placed it centered; use the sliders or chat to align it."}
-        </p>
-      )}
-
       {phase === "ready" && frameSize && (
         <>
           <canvas ref={previewCanvasRef} className="frame-preview" style={{ maxHeight: 420, width: "100%" }} />
@@ -587,12 +551,13 @@ export default function EditStep({
             </button>
           </div>
 
-          {alignerOpen && alignerBaseRef.current && originalImgRef.current && (
+          {alignerOpen && originalImgRef.current && rawAnatomyImgRef.current && rawAnatomySizeRef.current && (
             <div style={{ marginTop: 16 }}>
               <AnatomyAligner
                 frameImg={originalImgRef.current}
                 frameSize={frameSize}
-                anatomyBaseCanvas={alignerBaseRef.current}
+                anatomyImg={rawAnatomyImgRef.current}
+                anatomySize={rawAnatomySizeRef.current}
                 initialAdjust={adjust}
                 onConfirm={handleAlignerConfirm}
                 onCancel={() => setAlignerOpen(false)}

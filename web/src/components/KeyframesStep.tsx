@@ -9,7 +9,7 @@ import {
   uploadKeyframeAnatomy,
   type ExportJobStatus,
 } from "../api/client";
-import { DEFAULT_MANUAL_ADJUST, fitAnatomyToPose, type AnatomyFitInfo, type ManualAdjust } from "../cv/anatomyFit";
+import { DEFAULT_MANUAL_ADJUST, placeAnatomyManually, type ManualAdjust } from "../cv/anatomyFit";
 import { useJobPolling } from "../hooks/useJobPolling";
 import { detectPose } from "../cv/pose";
 import { segmentPerson } from "../cv/segmentation";
@@ -40,7 +40,6 @@ interface KeyframeEntry {
   framePose: PoseKeypoint[] | null;
   frameSize: { width: number; height: number } | null;
   anatomyImageUrl: string | null;
-  matchInfo: AnatomyFitInfo | null;
   adjust: ManualAdjust;
   holdDurationSec: number;
   transitionInSec: number;
@@ -67,23 +66,15 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
   const [addingKeyframe, setAddingKeyframe] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const { status, setStatus, error, setError, start: startPolling, stop: stopPolling } = useJobPolling(getKeyframesExportStatus);
-  // Per-keyframe raw anatomy image + its own detected pose, kept around so
-  // the alignment step (and re-opening it later to adjust again) can re-run
-  // the fit without needing the file re-uploaded — mirrors EditStep.tsx's
-  // rawAnatomyImgRef/rawAnatomySizeRef/uploadedPoseRef, just keyed per
-  // keyframe since there can be several independent anatomy images here.
-  const rawAnatomyRef = useRef<Map<string, { img: HTMLImageElement; rawSize: { width: number; height: number }; rawPose: PoseKeypoint[] }>>(
-    new Map(),
-  );
+  // Per-keyframe raw anatomy image (unmodified — never reshaped), kept
+  // around so re-opening the aligner and re-placing it at a new manual
+  // adjust doesn't need the file re-uploaded — mirrors EditStep.tsx's
+  // rawAnatomyImgRef/rawAnatomySizeRef, just keyed per keyframe since there
+  // can be several independent anatomy images here.
+  const rawAnatomyRef = useRef<Map<string, { img: HTMLImageElement; rawSize: { width: number; height: number } }>>(new Map());
   // Loaded frame images, kept around so re-opening the aligner doesn't
   // re-fetch the frame over the network every time.
   const frameImgRef = useRef<Map<string, HTMLImageElement>>(new Map());
-  // The auto-fit anatomy layer (already warped to the frame at identity
-  // manual adjust) + starting manual adjust for whichever keyframe's
-  // aligner is currently open.
-  const alignerBaseRef = useRef<Map<string, { frameImg: HTMLImageElement; baseCanvas: HTMLCanvasElement; initialAdjust: ManualAdjust }>>(
-    new Map(),
-  );
   const [aligningKfId, setAligningKfId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -121,7 +112,6 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
             framePose,
             frameSize,
             anatomyImageUrl: null,
-            matchInfo: null,
             adjust: DEFAULT_MANUAL_ADJUST,
             holdDurationSec: 3,
             transitionInSec: 0.4,
@@ -144,31 +134,28 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
   }
 
   async function handleAnatomyFile(kf: KeyframeEntry, file: File) {
-    if (!kf.framePose || !kf.frameSize) return;
+    if (!kf.frameSize) return;
     patchKeyframe(kf.id, { busy: true, error: null, adjust: DEFAULT_MANUAL_ADJUST });
     try {
       const url = URL.createObjectURL(file);
       const img = await loadImage(url);
       const rawSize = { width: img.naturalWidth, height: img.naturalHeight };
-      const rawPose = await detectPose(img).catch(() => [] as PoseKeypoint[]);
-      rawAnatomyRef.current.set(kf.id, { img, rawSize, rawPose });
-      await openAligner(kf, DEFAULT_MANUAL_ADJUST);
+      rawAnatomyRef.current.set(kf.id, { img, rawSize });
+      await openAligner(kf);
     } catch (e) {
       patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
     }
   }
 
   /**
-   * Computes the auto-fit anatomy layer (puppet-warped or rigid, whatever
-   * fitAnatomyToPose picks, at identity manual adjust) for one keyframe and
-   * opens the large touch-drag/pinch alignment surface on top of it —
-   * that's the primary way alignment gets corrected now: the user drags and
-   * pinches the anatomy layer directly onto the frame below it and confirms,
-   * rather than nudging small numeric sliders blind to what they're actually
-   * doing.
+   * Opens the large touch-drag/pinch alignment surface for one keyframe's
+   * uploaded anatomy image — the only way alignment gets set now. No
+   * automatic pose-based fit runs here at all; the raw image is placed at a
+   * neutral, pose-agnostic centered starting point (see anatomyFit.ts) and
+   * the user's own gestures do the rest.
    */
-  async function openAligner(kf: KeyframeEntry, initialAdjust: ManualAdjust) {
-    if (!kf.framePose || !kf.frameSize) return;
+  async function openAligner(kf: KeyframeEntry) {
+    if (!kf.frameSize) return;
     const raw = rawAnatomyRef.current.get(kf.id);
     if (!raw) return;
     patchKeyframe(kf.id, { busy: true, error: null });
@@ -178,9 +165,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
         frameImg = await loadImage(kf.frameUrl);
         frameImgRef.current.set(kf.id, frameImg);
       }
-      const { canvas, info } = fitAnatomyToPose(raw.img, raw.rawPose, raw.rawSize, kf.framePose, kf.frameSize, DEFAULT_MANUAL_ADJUST);
-      alignerBaseRef.current.set(kf.id, { frameImg, baseCanvas: canvas, initialAdjust });
-      patchKeyframe(kf.id, { busy: false, matchInfo: info });
+      patchKeyframe(kf.id, { busy: false });
       setAligningKfId(kf.id);
     } catch (e) {
       patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
@@ -188,28 +173,24 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
   }
 
   /**
-   * Re-runs the fit for one keyframe's already-uploaded anatomy image
-   * against the given manual adjust (the result of the user's drag/pinch
-   * alignment), then uploads the result. Mirrors EditStep.tsx's
-   * rewarpAndUpload — the counterpart that lets a user correct a fit the
-   * automatic pose/segment matching didn't get exactly right, which
-   * (unlike the single-freeze Edit screen) this mode had no way to do at
-   * all before.
+   * Renders one keyframe's raw anatomy image at the given manual adjust
+   * (the result of the user's drag/pinch alignment) and uploads it. No
+   * pose matching, no reshaping — just placing the unmodified image.
    */
-  async function rewarpAndUpload(kfId: string, framePose: PoseKeypoint[], frameSize: { width: number; height: number }, adjust: ManualAdjust) {
+  async function placeAndUpload(kfId: string, frameSize: { width: number; height: number }, adjust: ManualAdjust) {
     const raw = rawAnatomyRef.current.get(kfId);
     if (!raw) return;
-    const { canvas, info } = fitAnatomyToPose(raw.img, raw.rawPose, raw.rawSize, framePose, frameSize, adjust);
+    const canvas = placeAnatomyManually(raw.img, raw.rawSize, frameSize, adjust);
     const { imageUrl } = await uploadKeyframeAnatomy(sessionId, kfId, canvas.toDataURL("image/png"));
-    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, matchInfo: info, adjust });
+    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, adjust });
   }
 
   async function handleAlignerConfirm(kf: KeyframeEntry, adjust: ManualAdjust) {
     setAligningKfId(null);
-    if (!kf.framePose || !kf.frameSize) return;
+    if (!kf.frameSize) return;
     patchKeyframe(kf.id, { busy: true });
     try {
-      await rewarpAndUpload(kf.id, kf.framePose, kf.frameSize, adjust);
+      await placeAndUpload(kf.id, kf.frameSize, adjust);
       patchKeyframe(kf.id, { busy: false });
     } catch (e) {
       patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
@@ -238,7 +219,6 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
       setKeyframes((kfs) => kfs.filter((k) => k.id !== kf.id));
       rawAnatomyRef.current.delete(kf.id);
       frameImgRef.current.delete(kf.id);
-      alignerBaseRef.current.delete(kf.id);
       if (aligningKfId === kf.id) setAligningKfId(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -269,8 +249,8 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
       <p className="muted">
         Pick as many moments as you want; each becomes an anatomy freeze point — the body swaps to anatomy (the head always stays the
         real person), holds for a duration you choose, then the original resumes. Download each frame and generate a precise anatomy
-        image for it externally for the most accurate result, or upload a generic reference and let the app fit it automatically. You
-        can keep editing everything below until you export.
+        image for it externally, upload it, then drag and pinch it into place yourself — the app never alters the image, only
+        positions it exactly where you put it. You can keep editing everything below until you export.
       </p>
 
       {objectUrl && <video ref={videoRef} src={objectUrl} className="frame-preview" style={{ maxHeight: 280 }} controls={false} muted />}
@@ -308,18 +288,20 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
       {keyframes.length > 0 && (
         <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 16 }}>
           {keyframes.map((kf) => {
-            const alignerData = alignerBaseRef.current.get(kf.id);
-            if (aligningKfId === kf.id && alignerData && kf.frameSize) {
+            const raw = rawAnatomyRef.current.get(kf.id);
+            const frameImg = frameImgRef.current.get(kf.id);
+            if (aligningKfId === kf.id && raw && frameImg && kf.frameSize) {
               return (
                 <div key={kf.id} className="card" style={{ margin: 0 }}>
                   <p style={{ margin: "0 0 8px" }}>
                     <strong>Aligning keyframe at {kf.timeSec.toFixed(2)}s</strong>
                   </p>
                   <AnatomyAligner
-                    frameImg={alignerData.frameImg}
+                    frameImg={frameImg}
                     frameSize={kf.frameSize}
-                    anatomyBaseCanvas={alignerData.baseCanvas}
-                    initialAdjust={alignerData.initialAdjust}
+                    anatomyImg={raw.img}
+                    anatomySize={raw.rawSize}
+                    initialAdjust={kf.adjust}
                     onConfirm={(adjust) => handleAlignerConfirm(kf, adjust)}
                     onCancel={handleAlignerCancel}
                   />
@@ -360,22 +342,12 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
                       }}
                     />
                   </label>
-                  {kf.busy && <p className="muted">Fitting…</p>}
-                  {kf.matchInfo && (
-                    <p className="muted" style={{ marginTop: 4 }}>
-                      {kf.matchInfo.mode === "puppet" &&
-                        (kf.matchInfo.gapsFilled
-                          ? `Bent ${kf.matchInfo.matched} of ${kf.matchInfo.total} body segments to match this frame (rest filled from a whole-image fit).`
-                          : `Bent every body segment (${kf.matchInfo.matched}/${kf.matchInfo.total}) to match this frame.`)}
-                      {kf.matchInfo.mode === "rigid" && `Auto-aligned as a whole image (${kf.matchInfo.matched}/${kf.matchInfo.total} joints matched).`}
-                      {kf.matchInfo.mode === "center" && "Couldn't reliably detect a pose — placed centered."}
-                    </p>
-                  )}
+                  {kf.busy && <p className="muted">Loading…</p>}
                   {kf.error && <div className="error-box">{kf.error}</div>}
 
                   {kf.anatomyImageUrl && kf.frameSize && (
                     <div className="row" style={{ marginTop: 12 }}>
-                      <button type="button" onClick={() => openAligner(kf, kf.adjust)} disabled={kf.busy}>
+                      <button type="button" onClick={() => openAligner(kf)} disabled={kf.busy}>
                         Adjust alignment
                       </button>
                     </div>
