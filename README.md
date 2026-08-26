@@ -700,6 +700,30 @@ transformed layers too). Wired into both `KeyframesStep.tsx` and
 `EditStep.tsx`, since both share `AnatomyAligner` and both can hit the
 same bend-angle ceiling.
 
+### Ruling out a resolution-specific gap in the testing itself
+
+After the split-alignment fix, the user reported the export still didn't
+match a careful manual alignment, without a specific new defect to point
+to. Every alignment E2E test up to that point (this section and the
+compositing-alpha one above) used small, round test resolutions —
+400x300, 480x360 — while the user's real footage is 608x1080: odd,
+real-phone-shot portrait dimensions where `ffmpeg.ts`'s scale-filter
+auto-dimension rounding (`scaleFilterFor`'s `-2` logic, the 1080p
+resolution cap, SAR normalization — see "ffmpeg's own memory footprint"
+below) has more room to disagree with itself than at convenient round
+numbers. That's a real, previously-untested gap, so it got tested
+directly: the same real-gesture -> confirm -> export -> pixel-check flow
+as the compositing-alpha section above, rerun at exactly 608x1080. It
+passed identically — the export resolution matched the source exactly,
+and the covered/gap/background pixels landed exactly where predicted, the
+same as at every other resolution tested. This doesn't prove nothing is
+wrong (this session's own history includes real bugs that took a specific
+resolution, a specific segmentation model, or a specific real photo to
+surface), but it does rule out plain scale-filter rounding as the
+explanation, and adds a fourth independent resolution/scenario (after the
+single-keyframe, two-keyframe, and split-alignment checks above) where the
+alignment-to-export chain has been verified pixel-exact.
+
 ## Anatomy Slides mode
 
 A fourth mode, added after direct user feedback that dressing the anatomy
