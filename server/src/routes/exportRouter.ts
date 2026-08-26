@@ -111,6 +111,7 @@ exportRouter.post("/sessions/:id/export", (req, res, next) => {
             style: transitionStyle,
             verticalBounds: pose ? verticalBoundsFromPose(pose) : undefined,
             radialCenter: pose ? radialCenterFromPose(pose) : undefined,
+            ignoreMask: session.ignoreMask,
           },
           (fraction) =>
             setJob(session.id, {

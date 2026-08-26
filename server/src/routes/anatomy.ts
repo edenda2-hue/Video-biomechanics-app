@@ -23,11 +23,12 @@ anatomyRouter.post("/sessions/:id/anatomy/upload", async (req, res, next) => {
 
     const imagePngBase64 = req.body?.imagePngBase64 as string | undefined;
     if (!imagePngBase64) throw new HttpError(400, "imagePngBase64 is required");
+    const ignoreMask = req.body?.ignoreMask as boolean | undefined;
 
     const outPath = path.join(sessionDir(session.id), "anatomy_manual.png");
     await fs.writeFile(outPath, Buffer.from(imagePngBase64.replace(/^data:image\/png;base64,/, ""), "base64"));
 
-    updateSession(session.id, { anatomyImagePath: outPath, anatomyApproved: true });
+    updateSession(session.id, { anatomyImagePath: outPath, anatomyApproved: true, ignoreMask: Boolean(ignoreMask) });
     res.json({ imageUrl: `/api/sessions/${session.id}/anatomy?ts=${Date.now()}` });
   } catch (err) {
     next(err);

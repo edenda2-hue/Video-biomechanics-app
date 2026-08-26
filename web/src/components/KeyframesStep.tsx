@@ -43,6 +43,8 @@ interface KeyframeEntry {
   adjust: ManualAdjust;
   /** Set when this keyframe was last confirmed with the upper/lower body positioned independently; null means the single whole-image `adjust` above is what's in effect. */
   split: SplitManualAdjust | null;
+  /** When true, this keyframe's export shows exactly what was manually placed, ignoring the real mask's own confidence (the head stays excluded regardless). See AnatomyAligner's "Ignore mask" toggle. */
+  ignoreMask: boolean;
   holdDurationSec: number;
   transitionInSec: number;
   transitionOutSec: number;
@@ -120,6 +122,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
             anatomyImageUrl: null,
             adjust: DEFAULT_MANUAL_ADJUST,
             split: null,
+            ignoreMask: false,
             holdDurationSec: 3,
             transitionInSec: 0.4,
             transitionOutSec: 0.4,
@@ -142,7 +145,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
 
   async function handleAnatomyFile(kf: KeyframeEntry, file: File) {
     if (!kf.frameSize) return;
-    patchKeyframe(kf.id, { busy: true, error: null, adjust: DEFAULT_MANUAL_ADJUST, split: null });
+    patchKeyframe(kf.id, { busy: true, error: null, adjust: DEFAULT_MANUAL_ADJUST, split: null, ignoreMask: false });
     try {
       const url = URL.createObjectURL(file);
       const img = await loadImage(url);
@@ -184,12 +187,13 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
    * (the result of the user's drag/pinch alignment) and uploads it. No
    * pose matching, no reshaping — just placing the unmodified image.
    */
-  async function placeAndUpload(kfId: string, frameSize: { width: number; height: number }, adjust: ManualAdjust) {
+  async function placeAndUpload(kfId: string, frameSize: { width: number; height: number }, adjust: ManualAdjust, ignoreMask: boolean) {
     const raw = rawAnatomyRef.current.get(kfId);
     if (!raw) return;
     const canvas = placeAnatomyManually(raw.img, raw.rawSize, frameSize, adjust);
     const { imageUrl } = await uploadKeyframeAnatomy(sessionId, kfId, canvas.toDataURL("image/png"));
-    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, adjust, split: null });
+    await updateKeyframe(sessionId, kfId, { ignoreMask });
+    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, adjust, split: null, ignoreMask });
   }
 
   /**
@@ -198,32 +202,38 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
    * comments for why — a single rigid placement can't fix a bend-angle
    * mismatch between the anatomy image and this exact frame).
    */
-  async function placeAndUploadSplit(kfId: string, frameSize: { width: number; height: number }, split: SplitManualAdjust) {
+  async function placeAndUploadSplit(
+    kfId: string,
+    frameSize: { width: number; height: number },
+    split: SplitManualAdjust,
+    ignoreMask: boolean,
+  ) {
     const raw = rawAnatomyRef.current.get(kfId);
     if (!raw) return;
     const canvas = placeAnatomyManuallySplit(raw.img, raw.rawSize, frameSize, split);
     const { imageUrl } = await uploadKeyframeAnatomy(sessionId, kfId, canvas.toDataURL("image/png"));
-    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, split });
+    await updateKeyframe(sessionId, kfId, { ignoreMask });
+    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, split, ignoreMask });
   }
 
-  async function handleAlignerConfirm(kf: KeyframeEntry, adjust: ManualAdjust) {
+  async function handleAlignerConfirm(kf: KeyframeEntry, adjust: ManualAdjust, ignoreMask: boolean) {
     setAligningKfId(null);
     if (!kf.frameSize) return;
     patchKeyframe(kf.id, { busy: true });
     try {
-      await placeAndUpload(kf.id, kf.frameSize, adjust);
+      await placeAndUpload(kf.id, kf.frameSize, adjust, ignoreMask);
       patchKeyframe(kf.id, { busy: false });
     } catch (e) {
       patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
     }
   }
 
-  async function handleAlignerConfirmSplit(kf: KeyframeEntry, split: SplitManualAdjust) {
+  async function handleAlignerConfirmSplit(kf: KeyframeEntry, split: SplitManualAdjust, ignoreMask: boolean) {
     setAligningKfId(null);
     if (!kf.frameSize) return;
     patchKeyframe(kf.id, { busy: true });
     try {
-      await placeAndUploadSplit(kf.id, kf.frameSize, split);
+      await placeAndUploadSplit(kf.id, kf.frameSize, split, ignoreMask);
       patchKeyframe(kf.id, { busy: false });
     } catch (e) {
       patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
@@ -346,11 +356,12 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
                     anatomyImg={raw.img}
                     anatomySize={raw.rawSize}
                     initialAdjust={kf.adjust}
-                    onConfirm={(adjust) => handleAlignerConfirm(kf, adjust)}
+                    onConfirm={(adjust, ignoreMask) => handleAlignerConfirm(kf, adjust, ignoreMask)}
                     onCancel={handleAlignerCancel}
                     maskImg={maskImgRef.current.get(kf.id)}
                     initialSplit={kf.split}
-                    onConfirmSplit={(split) => handleAlignerConfirmSplit(kf, split)}
+                    onConfirmSplit={(split, ignoreMask) => handleAlignerConfirmSplit(kf, split, ignoreMask)}
+                    initialIgnoreMask={kf.ignoreMask}
                   />
                 </div>
               );

@@ -80,6 +80,8 @@ export interface Keyframe {
   transitionInSec: number;
   transitionOutSec: number;
   transitionStyle: TransitionStyle;
+  /** When true, export shows exactly what was manually placed for this keyframe, ignoring the real segmentation mask's own confidence (the head is still always excluded). See server/src/types.ts's Keyframe.ignoreMask. */
+  ignoreMask?: boolean;
 }
 
 /** One full-frame anatomy slide in Anatomy Slides mode — see server/src/types.ts's Slide for the full picture. */

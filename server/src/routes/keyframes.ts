@@ -149,6 +149,7 @@ keyframesRouter.put("/sessions/:id/keyframes/:kfId", (req, res, next) => {
       }
       patch.transitionStyle = req.body.transitionStyle as TransitionStyle;
     }
+    if (req.body?.ignoreMask !== undefined) patch.ignoreMask = Boolean(req.body.ignoreMask);
 
     const holdDurationSec = patch.holdDurationSec ?? kf.holdDurationSec;
     const transitionInSec = patch.transitionInSec ?? kf.transitionInSec;
@@ -229,6 +230,7 @@ keyframesRouter.post("/sessions/:id/keyframes/export", (req, res, next) => {
               verticalBounds: verticalBoundsFromPose(kf.pose!),
               radialCenter: radialCenterFromPose(kf.pose!),
               excludeHeadPose: kf.pose,
+              ignoreMask: kf.ignoreMask,
             },
             (fraction) =>
               setJob(key, {

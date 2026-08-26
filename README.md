@@ -788,6 +788,63 @@ next lever is the segmentation model's confidence on that specific pose —
 now visible during alignment instead of only discovered after export — not
 the alignment or export pipeline itself.
 
+### When the mask itself is the ceiling: a manual override
+
+It was: after the fix above, the user re-tested the exact same circled
+frame and still saw the gap. That's not a contradiction of the previous
+section — it's confirmation of it. The preview and export were already
+proven identical (same section, verified on live canvas pixels). If both
+now agree and still show a gap in the same spot, the mask's own confidence
+on that real photo is the actual ceiling, not a mismatch between what the
+user did and what got shown. No amount of re-aligning changes that: the
+mask decides where anatomy is *allowed* to show regardless of how
+precisely it's positioned.
+
+Framed against the standing instruction that's run through this whole
+project — the app doesn't decide anything on its own, the user does — the
+automatic mask silently overriding a careful manual placement is exactly
+that kind of decision, just one that hadn't been named as such until this
+report made it concrete. So the fix is a manual override, not a smarter
+mask: `AnatomyAligner.tsx` gained an "Ignore mask — show exactly what I
+placed" checkbox, opt-in, off by default. Turning it on drops the mask gate
+entirely for that keyframe/frame — the live preview stops calling
+`applyMaskGate` (so it keeps showing exactly what the fix above already
+made accurate, just without the automatic trim), and on confirm the flag
+travels through `onConfirm`/`onConfirmSplit` into `KeyframesStep.tsx` /
+`EditStep.tsx` state, then to the server (`Keyframe.ignoreMask` /
+`Session.ignoreMask` in `types.ts`) alongside the usual anatomy
+upload/update calls. At export, `buildFreezeSequence` in `compositing.ts`
+takes an `ignoreMask` option: when set, it substitutes a synthetic
+all-255-confidence buffer for the real mask read from disk *before*
+`excludeHeadFromMask` runs — so the real head/face still always shows
+through untouched (that guarantee is independent of this override and
+wasn't touched), only the *body* mask's veto power is what gets bypassed.
+Nothing about the underlying anatomy image, the alignment math, or the
+export compositing formula changed — the only thing that changed is
+whether the mask gets consulted at all for that one keyframe.
+
+**Verified against the real exported video, not just the preview**: the
+same fully-opaque test layer from the section above was enlarged to cover
+the whole canvas, confirmed once with the override off (the corner outside
+the mock mask's ellipse stayed the original frame color, as expected), then
+again with the override on — the corner switched to the anatomy color in
+the live preview immediately, and after a real export/download/frame-
+extract round-trip, that exact pixel in the *real video file* was the
+anatomy color too, proving the flag survives all the way through upload,
+storage, and server-side compositing, not just the client-side preview.
+The existing single-keyframe, split-alignment, and masked-preview
+regression tests were rerun unchanged immediately after and all still
+passed pixel-exact — confirming the default (override off) path is
+untouched by this addition.
+
+**The honest tradeoff, stated in the UI itself**: this removes a safety
+net, not just a bug. With the override on, nothing trims the anatomy layer
+to the real body outline anymore — if the manual placement runs slightly
+outside the actual person (onto background or clothing at the edges), that
+now shows too, since there's no longer a mask checking the placement
+against reality. That's the deliberate tradeoff of trusting a careful
+manual alignment over an uncertain automatic one, not an oversight.
+
 ## Anatomy Slides mode
 
 A fourth mode, added after direct user feedback that dressing the anatomy

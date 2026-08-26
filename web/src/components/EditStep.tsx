@@ -43,6 +43,10 @@ export default function EditStep({
   // AnatomyAligner/anatomyFit.ts's doc comments) instead of the single
   // whole-image `adjust` above.
   const [split, setSplit] = useState<SplitManualAdjust | null>(null);
+  // When true, export shows exactly what was manually placed, ignoring the
+  // real segmentation mask's own confidence — see AnatomyAligner's "Ignore
+  // mask" toggle and server/src/types.ts's Session.ignoreMask doc comment.
+  const [ignoreMask, setIgnoreMask] = useState(false);
   const [anatomyImageUrl, setAnatomyImageUrl] = useState<string | null>(null);
 
   const [timeline, setTimelineState] = useState<TimelineState>({
@@ -121,7 +125,8 @@ export default function EditStep({
       rawAnatomySizeRef.current = { width: img.naturalWidth, height: img.naturalHeight };
       setAdjust(DEFAULT_ADJUST);
       setSplit(null);
-      await rewarpAndUpload(DEFAULT_ADJUST, frameSize);
+      setIgnoreMask(false);
+      await rewarpAndUpload(DEFAULT_ADJUST, frameSize, false);
       setPhase("ready");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -137,7 +142,11 @@ export default function EditStep({
    * per-limb warp used to run here, removed after direct user feedback that
    * any automatic reshaping of the uploaded image wasn't acceptable).
    */
-  async function rewarpAndUpload(manualAdjust: typeof DEFAULT_ADJUST, size: { width: number; height: number }) {
+  async function rewarpAndUpload(
+    manualAdjust: typeof DEFAULT_ADJUST,
+    size: { width: number; height: number },
+    ignoreMaskOverride: boolean = ignoreMask,
+  ) {
     const img = rawAnatomyImgRef.current;
     const rawSize = rawAnatomySizeRef.current;
     if (!img || !rawSize) return;
@@ -145,7 +154,7 @@ export default function EditStep({
     const canvas = placeAnatomyManually(img, rawSize, size, manualAdjust);
 
     const dataUrl = canvas.toDataURL("image/png");
-    const { imageUrl } = await uploadAnatomyImage(sessionId, dataUrl);
+    const { imageUrl } = await uploadAnatomyImage(sessionId, dataUrl, ignoreMaskOverride);
     setAnatomyImageUrl(imageUrl);
   }
 
@@ -155,7 +164,11 @@ export default function EditStep({
    * comments for why (a single rigid placement can't fix a bend-angle
    * mismatch between the anatomy image and this exact frame).
    */
-  async function rewarpAndUploadSplit(splitAdjust: SplitManualAdjust, size: { width: number; height: number }) {
+  async function rewarpAndUploadSplit(
+    splitAdjust: SplitManualAdjust,
+    size: { width: number; height: number },
+    ignoreMaskOverride: boolean = ignoreMask,
+  ) {
     const img = rawAnatomyImgRef.current;
     const rawSize = rawAnatomySizeRef.current;
     if (!img || !rawSize) return;
@@ -163,7 +176,7 @@ export default function EditStep({
     const canvas = placeAnatomyManuallySplit(img, rawSize, size, splitAdjust);
 
     const dataUrl = canvas.toDataURL("image/png");
-    const { imageUrl } = await uploadAnatomyImage(sessionId, dataUrl);
+    const { imageUrl } = await uploadAnatomyImage(sessionId, dataUrl, ignoreMaskOverride);
     setAnatomyImageUrl(imageUrl);
   }
 
@@ -178,24 +191,26 @@ export default function EditStep({
     setAlignerOpen(true);
   }
 
-  async function handleAlignerConfirm(nextAdjust: typeof DEFAULT_ADJUST) {
+  async function handleAlignerConfirm(nextAdjust: typeof DEFAULT_ADJUST, nextIgnoreMask: boolean) {
     setAlignerOpen(false);
     setAdjust(nextAdjust);
     setSplit(null);
+    setIgnoreMask(nextIgnoreMask);
     if (!frameSize) return;
     try {
-      await rewarpAndUpload(nextAdjust, frameSize);
+      await rewarpAndUpload(nextAdjust, frameSize, nextIgnoreMask);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   }
 
-  async function handleAlignerConfirmSplit(nextSplit: SplitManualAdjust) {
+  async function handleAlignerConfirmSplit(nextSplit: SplitManualAdjust, nextIgnoreMask: boolean) {
     setAlignerOpen(false);
     setSplit(nextSplit);
+    setIgnoreMask(nextIgnoreMask);
     if (!frameSize) return;
     try {
-      await rewarpAndUploadSplit(nextSplit, frameSize);
+      await rewarpAndUploadSplit(nextSplit, frameSize, nextIgnoreMask);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -456,7 +471,8 @@ export default function EditStep({
       if (rawAnatomyImgRef.current && rawAnatomySizeRef.current) {
         setAdjust(DEFAULT_ADJUST);
         setSplit(null);
-        await rewarpAndUpload(DEFAULT_ADJUST, size);
+        setIgnoreMask(false);
+        await rewarpAndUpload(DEFAULT_ADJUST, size, false);
       }
       setPhase("ready");
     } catch (e) {
@@ -494,7 +510,8 @@ export default function EditStep({
         if (rawAnatomyImgRef.current && rawAnatomySizeRef.current) {
           setAdjust(DEFAULT_ADJUST);
           setSplit(null);
-          await rewarpAndUpload(DEFAULT_ADJUST, size);
+          setIgnoreMask(false);
+          await rewarpAndUpload(DEFAULT_ADJUST, size, false);
         }
         setPhase("ready");
       } else if (result.anatomyNudge && frameSize) {
@@ -605,6 +622,7 @@ export default function EditStep({
                 maskImg={maskImgRef.current ?? undefined}
                 initialSplit={split}
                 onConfirmSplit={handleAlignerConfirmSplit}
+                initialIgnoreMask={ignoreMask}
               />
             </div>
           )}

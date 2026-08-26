@@ -106,6 +106,17 @@ export interface Keyframe {
   transitionInSec: number;
   transitionOutSec: number;
   transitionStyle: TransitionStyle;
+  /**
+   * When true, export skips the real segmentation mask for this keyframe
+   * entirely (as if every pixel were confidently "person") and shows
+   * exactly what the user manually placed, unchanged — the head is still
+   * excluded from the swap as always. Opt-in escape hatch for when the
+   * mask's own confidence is the limiting factor, not the alignment: a
+   * user's careful manual placement should be able to override an
+   * automatic model decision, not silently lose to it. See README's "The
+   * preview didn't show what the mask would actually keep" section.
+   */
+  ignoreMask?: boolean;
 }
 
 /**
@@ -162,6 +173,8 @@ export interface Session {
   maskPath?: string;
   pose?: PoseKeypoint[];
   anatomyImagePath?: string;
+  /** Same escape hatch as Keyframe.ignoreMask, for the single-freeze (Edit) flow. */
+  ignoreMask?: boolean;
   anatomyQuality?: QualityScore;
   anatomyApproved: boolean;
   muscles: MuscleSuggestion[];

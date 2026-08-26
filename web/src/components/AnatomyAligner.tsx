@@ -28,7 +28,7 @@ export interface AnatomyAlignerProps {
   anatomyImg: HTMLImageElement;
   anatomySize: { width: number; height: number };
   initialAdjust: ManualAdjust;
-  onConfirm: (adjust: ManualAdjust) => void;
+  onConfirm: (adjust: ManualAdjust, ignoreMask: boolean) => void;
   onCancel: () => void;
   /** The frame's own person-segmentation mask (greyscale, same native size as frameSize), if available — traced into a target-boundary outline over the frame so the alignment is a "fit inside the line" task instead of eyeballing it. Optional: the aligner still works without it. */
   maskImg?: HTMLImageElement;
@@ -45,7 +45,13 @@ export interface AnatomyAlignerProps {
    * rigid placement can't fix a bend-angle mismatch between the anatomy
    * image's own pose and the target frame's).
    */
-  onConfirmSplit?: (split: SplitManualAdjust) => void;
+  onConfirmSplit?: (split: SplitManualAdjust, ignoreMask: boolean) => void;
+  /**
+   * Reopens the aligner with the "ignore the automatic mask" override
+   * already on, if this keyframe/frame was last confirmed that way.
+   * Defaults to false (the mask still gates coverage as normal).
+   */
+  initialIgnoreMask?: boolean;
 }
 
 /**
@@ -194,6 +200,7 @@ export default function AnatomyAligner({
   maskImg,
   initialSplit,
   onConfirmSplit,
+  initialIgnoreMask,
 }: AnatomyAlignerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [adjust, setAdjust] = useState<ManualAdjust>(initialAdjust);
@@ -204,6 +211,12 @@ export default function AnatomyAligner({
   const [lowerAdjust, setLowerAdjust] = useState<ManualAdjust>(initialSplit?.lower ?? initialAdjust);
   const [opacity, setOpacity] = useState(0.65);
   const [showTarget, setShowTarget] = useState(true);
+  // Opt-in escape hatch: the real segmentation mask can be less confident
+  // than the user's own manual placement about a specific spot (a
+  // self-occluded armpit next to a bent arm, for example) — when this is
+  // on, both the preview and the export show exactly what was placed,
+  // instead of letting the mask silently carve pieces out of it.
+  const [ignoreMask, setIgnoreMask] = useState(Boolean(initialIgnoreMask));
   const pointersRef = useRef<Map<number, PointerPt>>(new Map());
   const gestureRef = useRef<GestureState | null>(null);
   const maskScratchRef = useRef<HTMLCanvasElement | null>(null);
@@ -283,7 +296,7 @@ export default function AnatomyAligner({
       sctx.drawImage(layer, 0, 0);
       sctx.restore();
 
-      if (maskGray) {
+      if (maskGray && !ignoreMask) {
         applyMaskGate(scratch, maskGray);
       }
 
@@ -322,6 +335,7 @@ export default function AnatomyAligner({
     baseTransform,
     outlineCanvas,
     maskGray,
+    ignoreMask,
     displayW,
     displayH,
     displayScale,
@@ -423,9 +437,9 @@ export default function AnatomyAligner({
 
   function handleConfirmClick() {
     if (splitMode && onConfirmSplit) {
-      onConfirmSplit({ splitY, upper: upperAdjust, lower: lowerAdjust });
+      onConfirmSplit({ splitY, upper: upperAdjust, lower: lowerAdjust }, ignoreMask);
     } else {
-      onConfirm(adjust);
+      onConfirm(adjust, ignoreMask);
     }
   }
 
@@ -434,7 +448,10 @@ export default function AnatomyAligner({
       <p className="muted" style={{ marginTop: 0 }}>
         Drag with one finger to move, pinch with two fingers to resize/rotate — dress the anatomy layer exactly onto the body below it.
         {outlineCanvas && " Fit it inside the yellow outline — that's the real body boundary from this exact frame."}
-        {maskGray && " This preview already applies the real mask: any spot where the anatomy layer looks faded or missing is a spot the export will also leave as original footage, not a rendering gap."}
+        {maskGray && !ignoreMask &&
+          " This preview already applies the real mask: any spot where the anatomy layer looks faded or missing is a spot the export will also leave as original footage, not a rendering gap."}
+        {maskGray && ignoreMask &&
+          " Mask override is on: what you see here is exactly what will export, with no automatic fallback to original footage anywhere you've placed the anatomy layer."}
       </p>
       <canvas
         ref={canvasRef}
@@ -470,7 +487,19 @@ export default function AnatomyAligner({
             <input type="checkbox" checked={showTarget} onChange={(e) => setShowTarget(e.target.checked)} /> Show target boundary
           </label>
         )}
+        {maskGray && (
+          <label className="muted">
+            <input type="checkbox" checked={ignoreMask} onChange={(e) => setIgnoreMask(e.target.checked)} /> Ignore mask — show exactly what
+            I placed
+          </label>
+        )}
       </div>
+      {maskGray && ignoreMask && (
+        <p className="muted" style={{ marginTop: 4 }}>
+          The automatic mask won't hide any part of your placement anymore, even where it isn't confident that spot is body — so make sure
+          the edges of your placement stay close to the real body outline yourself, since nothing will trim them for you now.
+        </p>
+      )}
 
       {onConfirmSplit && (
         <div className="row" style={{ marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>

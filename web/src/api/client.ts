@@ -52,12 +52,12 @@ export async function submitPose(id: string, pose: PoseKeypoint[], maskPngBase64
 }
 
 /** Uploads an already client-aligned anatomy image (see cv/alignment.ts) as the session's anatomy frame. */
-export async function uploadAnatomyImage(id: string, imagePngBase64: string): Promise<{ imageUrl: string }> {
+export async function uploadAnatomyImage(id: string, imagePngBase64: string, ignoreMask?: boolean): Promise<{ imageUrl: string }> {
   return handle(
     await fetch(`${BASE}/sessions/${id}/anatomy/upload`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ imagePngBase64 }),
+      body: JSON.stringify({ imagePngBase64, ignoreMask }),
     }),
   );
 }
@@ -259,7 +259,7 @@ export async function uploadKeyframeAnatomy(id: string, kfId: string, imagePngBa
 export async function updateKeyframe(
   id: string,
   kfId: string,
-  patch: Partial<Pick<Keyframe, "holdDurationSec" | "transitionInSec" | "transitionOutSec" | "transitionStyle">>,
+  patch: Partial<Pick<Keyframe, "holdDurationSec" | "transitionInSec" | "transitionOutSec" | "transitionStyle" | "ignoreMask">>,
 ): Promise<Keyframe> {
   return handle(
     await fetch(`${BASE}/sessions/${id}/keyframes/${kfId}`, {

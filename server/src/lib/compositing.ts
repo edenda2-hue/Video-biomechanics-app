@@ -57,6 +57,15 @@ export interface FreezeSequenceOptions {
   radialCenter?: { cx: number; cy: number };
   /** Anatomy Keyframes mode: when set, zeroes the mask around the head (see excludeHeadFromMask) so the real head/face always shows through, only the body swaps to anatomy. */
   excludeHeadPose?: PoseKeypoint[];
+  /**
+   * Opt-in per-keyframe/frame override: skip the real segmentation mask
+   * entirely and treat every pixel as confidently "person" (i.e. show
+   * exactly what the user manually placed, unchanged), instead of letting
+   * the mask's own confidence silently carve out regions the user already
+   * positioned by hand. `excludeHeadPose` still applies on top, so the head
+   * is still excluded as always — this only overrides the *body* mask.
+   */
+  ignoreMask?: boolean;
 }
 
 /**
@@ -119,7 +128,12 @@ export async function buildFreezeSequence(
 
   const originalBuf = await sharp(originalFramePath).ensureAlpha().raw().toBuffer();
   const anatomyBuf = await sharp(anatomyImagePath).resize(width, height).ensureAlpha().raw().toBuffer();
-  let maskBuf = await sharp(maskPath).resize(width, height).greyscale().raw().toBuffer(); // 1 channel, 0-255
+  // ignoreMask: treat every pixel as confidently "person" instead of
+  // reading the real mask, so a user's manual placement can't be silently
+  // overridden by the segmentation model's own confidence at export time.
+  let maskBuf = opts.ignoreMask
+    ? Buffer.alloc(width * height, 255)
+    : await sharp(maskPath).resize(width, height).greyscale().raw().toBuffer(); // 1 channel, 0-255
   if (opts.excludeHeadPose) maskBuf = excludeHeadFromMask(maskBuf, width, height, opts.excludeHeadPose);
 
   const inFrames = Math.max(1, Math.round(fps * transitionInSec));
