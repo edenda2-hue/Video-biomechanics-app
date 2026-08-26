@@ -205,16 +205,26 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
     setAligningKfId(null);
   }
 
-  const timingDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // One debounce timer per keyframe (a Map, not a single ref) — a single
+  // shared timer would let editing a second keyframe's timing within the
+  // debounce window silently cancel the first keyframe's still-pending
+  // update before it ever reaches the server. Caught via a real two-slide
+  // export test in the (structurally identical) Anatomy Slides mode: the
+  // second slide's hold-duration edit was silently discarding the first's.
+  const timingDebounce = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   function scheduleTimingUpdate(
     kf: KeyframeEntry,
     patch: { holdDurationSec?: number; transitionInSec?: number; transitionOutSec?: number; transitionStyle?: TransitionStyle },
   ) {
     patchKeyframe(kf.id, patch);
-    if (timingDebounce.current) clearTimeout(timingDebounce.current);
-    timingDebounce.current = setTimeout(() => {
-      updateKeyframe(sessionId, kf.id, patch).catch((e) => patchKeyframe(kf.id, { error: e instanceof Error ? e.message : String(e) }));
-    }, 400);
+    const existing = timingDebounce.current.get(kf.id);
+    if (existing) clearTimeout(existing);
+    timingDebounce.current.set(
+      kf.id,
+      setTimeout(() => {
+        updateKeyframe(sessionId, kf.id, patch).catch((e) => patchKeyframe(kf.id, { error: e instanceof Error ? e.message : String(e) }));
+      }, 400),
+    );
   }
 
   async function handleDelete(kf: KeyframeEntry) {

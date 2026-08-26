@@ -108,6 +108,28 @@ export interface Keyframe {
   transitionStyle: TransitionStyle;
 }
 
+/**
+ * One point in "Anatomy Slides" mode (server/src/routes/slides.ts): the
+ * anatomy image swaps in as a full-frame slide — not dressed onto the
+ * person's body, the whole frame becomes the anatomy image — for
+ * `holdDurationSec`, then the original resumes. Deliberately skips
+ * everything Anatomy Keyframes needs for a body-precise swap (pose
+ * detection, person segmentation, manual touch alignment): there's no body
+ * to align to, so there's nothing to get wrong. A slide placed at
+ * `timeSec: 0` acts as an opening title card — the export starts already
+ * showing the anatomy image, transitioning out into the real video.
+ */
+export interface Slide {
+  id: string;
+  timeSec: number;
+  framePath?: string;
+  anatomyImagePath?: string;
+  holdDurationSec: number;
+  transitionInSec: number;
+  transitionOutSec: number;
+  transitionStyle: TransitionStyle;
+}
+
 export interface Session {
   id: string;
   createdAt: number;
@@ -123,6 +145,8 @@ export interface Session {
   trimEndSec?: number;
   /** Anatomy Keyframes mode: zero or more freeze points, sorted by timeSec at export time. */
   keyframes: Keyframe[];
+  /** Anatomy Slides mode: zero or more full-frame anatomy slides, sorted by timeSec at export time. */
+  slides: Slide[];
   /**
    * Continuous mode: the anatomy figure moves through this whole range
    * (instead of a single freeze) via server/src/lib/continuousComposite.ts.

@@ -640,6 +640,80 @@ get that as close as it can be, not perfect regardless of the source
 image's own shape. An anatomy image cropped with a transparent background
 close to the actual body shape will benefit the most from this.
 
+## Anatomy Slides mode
+
+A fourth mode, added after direct user feedback that dressing the anatomy
+image onto the person's body — even with the manual touch alignment and
+target-boundary outline above — still wasn't landing well: "maybe we
+should just swap between them." Anatomy Slides sidesteps the body-alignment
+problem entirely instead of trying to solve it further: the anatomy image
+isn't dressed onto the person at all — the **whole frame** swaps to the
+anatomy image, like a title card, at as many points as you choose (any
+mix of the video's start and/or points partway through), with a smooth
+crossfade/sweep in and out. There's no body to align to, so there's
+nothing to align: upload an image, place it in time, done.
+
+**How it works:**
+
+1. **Add a slide** at any timestamp, including `0:00` — the exact frame is
+   extracted the same way Anatomy Keyframes does, purely so the transition
+   has a real "before" frame to blend from/to. A slide at `0:00` acts as an
+   opening title card: the export starts already showing the anatomy
+   image, then fades into the real footage.
+2. **Upload an anatomy image** — used exactly as uploaded, resized to fill
+   the frame (`sharp`'s `cover` fit, cropping any excess rather than
+   letterboxing) so it always fills the frame edge-to-edge like a real
+   video frame would. No pose detection, no segmentation, no manual
+   alignment step — there's no body-shaped target to hit.
+3. **Everything stays editable up until export**: hold duration,
+   transition in/out speed and style (reusing the same five transition
+   styles as the other modes), per slide.
+4. **Export** reuses Anatomy Keyframes' exact splicing machinery
+   (`assembleMultiFreezeVideo`) unchanged — a slide is implemented as a
+   freeze/hold segment exactly like a keyframe, just composited with a
+   synthetic **fully-opaque mask** (`sharp` creates a plain white image at
+   the frame's dimensions) instead of a real person-segmentation mask, and
+   without the `excludeHeadPose` step Anatomy Keyframes uses to keep the
+   real head/face visible — there's no "real person" left in frame during
+   a slide to preserve. Concretely: `server/src/routes/slides.ts` is a
+   thin new router that reuses `extractFrame`, `buildFreezeSequence`,
+   `encodeImageSequence`, and `assembleMultiFreezeVideo` directly from the
+   existing library code, adding almost no new compositing logic of its
+   own — the whole feature is mostly "call the existing machinery with a
+   synthetic full mask and no pose."
+
+**A real edge case verified before trusting it**: `assembleMultiFreezeVideo`
+was written for Anatomy Keyframes, where a keyframe at exactly `timeSec: 0`
+had never actually come up in practice (there's always some footage before
+the first freeze point in that mode's normal use). Anatomy Slides' opening
+title card is *exactly* that case — a segment with zero seconds of original
+footage before it (`trim=0:0` in the generated ffmpeg filter). Rather than
+assume it degrades gracefully, this got a dedicated smoke test
+(`server/scripts/slides-smoke.mjs`): an opening slide at `t=0` plus a
+second slide mid-video, driven through the real HTTP API against a
+synthetic video, checking that the export actually *opens* on the anatomy
+image (not a flash of original footage first), correctly fades into the
+real footage afterward, and that the second slide's own distinct content
+shows up at the correctly time-shifted point once the first slide's
+inserted hold duration is accounted for. It passed with no changes needed
+to the existing assembly code — the `trim=0:0` zero-length prefix segment
+turned out to already be handled correctly.
+
+**A real bug this test also caught, in both this mode and Anatomy
+Keyframes**: `SlidesStep.tsx`'s per-entry timing controls (hold duration,
+transition speed/style) were debounced through a *single* shared timer ref
+for the whole component, not one per slide. Editing slide A's hold
+duration, then editing slide B's within the 400ms debounce window,
+silently cancelled slide A's still-pending update — it never reached the
+server at all, with no error or indication anything was lost. Caught
+directly by a real two-slide Playwright run through the UI: the exported
+video's timing didn't match what had just been set, because one of the two
+edits silently never saved. Fixed by keying the debounce timers in a `Map`
+per slide/keyframe id instead of one shared ref — applied to both
+`SlidesStep.tsx` and `KeyframesStep.tsx`, since both had the identical bug
+(`KeyframesStep.tsx`'s version had simply never been exercised by two
+near-simultaneous timing edits in prior testing).
+
 ## Alternate: AI-generated anatomy (not in the primary flow)
 
 The original OpenAI-based design — the app itself calls `images.edit` on
@@ -750,6 +824,19 @@ network access to the model CDN.
   that the body region actually shows the anatomy image, and that footage
   before the first keyframe is untouched. Run with the server up:
   `node server/scripts/keyframes-smoke.mjs`.
+- `server/scripts/slides-smoke.mjs` exercises Anatomy Slides mode end to
+  end: an opening slide at `t=0` (the zero-length-prefix-segment edge case
+  `assembleMultiFreezeVideo` had never actually been exercised against)
+  plus a second slide mid-video, each with a distinct solid-color anatomy
+  image, verifying the export literally opens on the first slide's image,
+  correctly fades back into the real footage, and that the second slide
+  shows its own distinct content at the correctly time-shifted point. Run
+  with the server up: `node server/scripts/slides-smoke.mjs`.
+- `server/scripts/compositing-alpha-smoke.mjs` regression-tests the
+  anatomy-alpha compositing fix described in "Manual alignment" above —
+  a gap in the anatomy image's own coverage must fall back to the original
+  footage, not render black. Run with the server up:
+  `node server/scripts/compositing-alpha-smoke.mjs`.
 - `server/scripts/responsiveness-stress.mjs` guards against the class of bug
   that once caused a real production 502 mid-export (compositing.ts's blend
   loops blocking Node's single-threaded event loop long enough that the

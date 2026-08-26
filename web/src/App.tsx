@@ -4,11 +4,12 @@ import EditStep from "./components/EditStep";
 import ExportStep from "./components/ExportStep";
 import FrameSelectStep from "./components/FrameSelectStep";
 import KeyframesStep from "./components/KeyframesStep";
+import SlidesStep from "./components/SlidesStep";
 import Stepper from "./components/Stepper";
 import UploadStep from "./components/UploadStep";
 import type { VideoMetadata } from "./types";
 
-type Mode = "freeze" | "continuous" | "keyframes";
+type Mode = "freeze" | "continuous" | "keyframes" | "slides";
 
 interface WizardState {
   step: number;
@@ -23,6 +24,7 @@ interface WizardState {
 const FREEZE_LABELS = ["Upload", "Mode", "Select Frame", "Edit", "Export"];
 const CONTINUOUS_LABELS = ["Upload", "Mode", "Continuous"];
 const KEYFRAMES_LABELS = ["Upload", "Mode", "Keyframes"];
+const SLIDES_LABELS = ["Upload", "Mode", "Slides"];
 
 export default function App() {
   const [state, setState] = useState<WizardState>({ step: 0 });
@@ -54,7 +56,15 @@ export default function App() {
         <div className="row" style={{ marginBottom: 12, alignItems: "center" }}>
           <Stepper
             current={state.step}
-            labels={state.mode === "continuous" ? CONTINUOUS_LABELS : state.mode === "keyframes" ? KEYFRAMES_LABELS : FREEZE_LABELS}
+            labels={
+              state.mode === "continuous"
+                ? CONTINUOUS_LABELS
+                : state.mode === "keyframes"
+                  ? KEYFRAMES_LABELS
+                  : state.mode === "slides"
+                    ? SLIDES_LABELS
+                    : FREEZE_LABELS
+            }
           />
           {history.length > 0 && (
             <button className="secondary" onClick={goBack}>
@@ -98,6 +108,16 @@ export default function App() {
                   Single freeze point
                 </button>
               </div>
+              <div className="card" style={{ flex: 1, margin: 0 }}>
+                <h3>Anatomy Slides</h3>
+                <p className="muted">
+                  No body alignment at all: the whole frame swaps to a full anatomy reference image at the start and/or at any points
+                  you choose, fading smoothly in and out of the real footage — like a title card, not dressed onto the person.
+                </p>
+                <button className="secondary" onClick={() => advance({ ...state, step: 2, mode: "slides" })}>
+                  Anatomy Slides
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -108,6 +128,10 @@ export default function App() {
 
         {state.mode === "keyframes" && state.step === 2 && state.sessionId && state.file && state.metadata && (
           <KeyframesStep sessionId={state.sessionId} file={state.file} metadata={state.metadata} />
+        )}
+
+        {state.mode === "slides" && state.step === 2 && state.sessionId && state.file && state.metadata && (
+          <SlidesStep sessionId={state.sessionId} file={state.file} metadata={state.metadata} />
         )}
 
         {state.mode === "freeze" && state.step === 2 && state.sessionId && state.file && state.metadata && (

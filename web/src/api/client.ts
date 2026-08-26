@@ -1,4 +1,4 @@
-import type { Keyframe, LabelPlacement, MuscleSuggestion, PoseKeypoint, QualityScore, Session, TransitionStyle, VideoMetadata } from "../types";
+import type { Keyframe, LabelPlacement, MuscleSuggestion, PoseKeypoint, QualityScore, Session, Slide, TransitionStyle, VideoMetadata } from "../types";
 
 const BASE = "/api";
 
@@ -280,4 +280,55 @@ export async function startKeyframesExport(id: string): Promise<{ jobId: string 
 
 export async function getKeyframesExportStatus(id: string): Promise<ExportJobStatus> {
   return handle(await fetch(`${BASE}/sessions/${id}/keyframes/export/status`));
+}
+
+// --- Anatomy Slides mode: the anatomy image swaps in as a full-frame
+// slide (not dressed onto the body) at as many points as you choose — no
+// pose detection, no segmentation, no manual alignment, since there's no
+// body to align to.
+
+export async function addSlide(id: string, timeSec: number): Promise<{ id: string; timeSec: number; frameUrl: string }> {
+  return handle(
+    await fetch(`${BASE}/sessions/${id}/slides`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ timeSec }),
+    }),
+  );
+}
+
+export async function uploadSlideAnatomy(id: string, slideId: string, imagePngBase64: string): Promise<{ imageUrl: string }> {
+  return handle(
+    await fetch(`${BASE}/sessions/${id}/slides/${slideId}/anatomy`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ imagePngBase64 }),
+    }),
+  );
+}
+
+export async function updateSlide(
+  id: string,
+  slideId: string,
+  patch: Partial<Pick<Slide, "holdDurationSec" | "transitionInSec" | "transitionOutSec" | "transitionStyle">>,
+): Promise<Slide> {
+  return handle(
+    await fetch(`${BASE}/sessions/${id}/slides/${slideId}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
+export async function deleteSlide(id: string, slideId: string): Promise<void> {
+  await handle(await fetch(`${BASE}/sessions/${id}/slides/${slideId}`, { method: "DELETE" }));
+}
+
+export async function startSlidesExport(id: string): Promise<{ jobId: string }> {
+  return handle(await fetch(`${BASE}/sessions/${id}/slides/export`, { method: "POST" }));
+}
+
+export async function getSlidesExportStatus(id: string): Promise<ExportJobStatus> {
+  return handle(await fetch(`${BASE}/sessions/${id}/slides/export/status`));
 }

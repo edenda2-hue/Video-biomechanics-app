@@ -25,6 +25,7 @@ import { exportRouter } from "./routes/exportRouter.js";
 import { chatRouter } from "./routes/chat.js";
 import { continuousRouter } from "./routes/continuous.js";
 import { keyframesRouter } from "./routes/keyframes.js";
+import { slidesRouter } from "./routes/slides.js";
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
@@ -47,6 +48,7 @@ app.use("/api", exportRouter);
 app.use("/api", chatRouter);
 app.use("/api", continuousRouter);
 app.use("/api", keyframesRouter);
+app.use("/api", slidesRouter);
 
 // Single-service deployment (see Dockerfile / render.yaml): if a built web
 // app is present, serve it from the same process/port as the API so the

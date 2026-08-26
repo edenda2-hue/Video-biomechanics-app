@@ -82,6 +82,16 @@ export interface Keyframe {
   transitionStyle: TransitionStyle;
 }
 
+/** One full-frame anatomy slide in Anatomy Slides mode — see server/src/types.ts's Slide for the full picture. */
+export interface Slide {
+  id: string;
+  timeSec: number;
+  holdDurationSec: number;
+  transitionInSec: number;
+  transitionOutSec: number;
+  transitionStyle: TransitionStyle;
+}
+
 export interface Session {
   id: string;
   metadata?: VideoMetadata;
@@ -98,4 +108,5 @@ export interface Session {
   labels: LabelPlacement[];
   attempts: number;
   keyframes: Keyframe[];
+  slides: Slide[];
 }
