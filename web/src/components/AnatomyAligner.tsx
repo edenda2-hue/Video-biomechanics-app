@@ -49,26 +49,36 @@ export interface AnatomyAlignerProps {
 }
 
 /**
- * Traces a greyscale person mask into a thin colored outline (the mask's
- * own silhouette edge — where confidence crosses ~50%), at the aligner's
- * display resolution. This is the visual "target boundary" the user aligns
- * the anatomy image against, turning positioning from "eyeball it against
- * the photo" into "fit inside the line" — closer to a matching-game/sticker
- * task than free-form guessing. Purely a positioning aid: it plays no part
- * in the actual export compositing, which uses the full-resolution mask
- * directly (server/src/lib/compositing.ts).
+ * Reads a greyscale person mask down to a flat per-pixel array (one byte per
+ * pixel, from the mask's R channel — masks are greyscale so R=G=B) at the
+ * aligner's display resolution. Shared by the target-boundary outline and
+ * the live coverage-gating below, so the mask image is only ever decoded
+ * once per (mask, display size), not on every drag frame.
  */
-function buildMaskOutline(maskImg: HTMLImageElement, width: number, height: number): HTMLCanvasElement {
+function readMaskGray(maskImg: HTMLImageElement, width: number, height: number): Uint8Array {
   const src = document.createElement("canvas");
   src.width = width;
   src.height = height;
   const sctx = src.getContext("2d")!;
   sctx.drawImage(maskImg, 0, 0, width, height);
-  const gray = sctx.getImageData(0, 0, width, height).data;
+  const data = sctx.getImageData(0, 0, width, height).data;
+  const gray = new Uint8Array(width * height);
+  for (let i = 0; i < width * height; i++) gray[i] = data[i * 4];
+  return gray;
+}
 
+/**
+ * Traces a greyscale person mask into a thin colored outline (the mask's
+ * own silhouette edge — where confidence crosses ~50%), at the aligner's
+ * display resolution. This is the visual "target boundary" the user aligns
+ * the anatomy image against, turning positioning from "eyeball it against
+ * the photo" into "fit inside the line" — closer to a matching-game/sticker
+ * task than free-form guessing.
+ */
+function buildMaskOutline(gray: Uint8Array, width: number, height: number): HTMLCanvasElement {
   const THRESHOLD = 128;
   const inside = new Uint8Array(width * height);
-  for (let i = 0; i < width * height; i++) inside[i] = gray[i * 4] >= THRESHOLD ? 1 : 0;
+  for (let i = 0; i < width * height; i++) inside[i] = gray[i] >= THRESHOLD ? 1 : 0;
 
   const out = document.createElement("canvas");
   out.width = width;
@@ -127,6 +137,28 @@ function buildSplitHalves(img: HTMLImageElement, splitY: number): { upper: HTMLC
   return { upper: half(0, cutPx), lower: half(cutPx, height) };
 }
 
+/**
+ * Multiplies `canvas`'s existing per-pixel alpha by the mask's confidence at
+ * that same pixel (gray/255) — the identical rule the server's real export
+ * compositing applies (server/src/lib/compositing.ts's blendFrame). Without
+ * this, the preview only ever shows a global "see-through" opacity, which
+ * looks like full coverage anywhere the anatomy image itself is opaque —
+ * even where the mask doesn't confidently classify that spot as body (e.g.
+ * a self-occluded armpit next to a bent arm) and export will correctly fall
+ * back to the original footage there. Mutates `canvas` in place.
+ */
+function applyMaskGate(canvas: HTMLCanvasElement, gray: Uint8Array) {
+  const ctx = canvas.getContext("2d")!;
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+  for (let i = 0; i < gray.length; i++) {
+    const a = data[i * 4 + 3];
+    if (a === 0) continue;
+    data[i * 4 + 3] = Math.round((a * gray[i]) / 255);
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
 function dist(a: PointerPt, b: PointerPt): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -174,6 +206,7 @@ export default function AnatomyAligner({
   const [showTarget, setShowTarget] = useState(true);
   const pointersRef = useRef<Map<number, PointerPt>>(new Map());
   const gestureRef = useRef<GestureState | null>(null);
+  const maskScratchRef = useRef<HTMLCanvasElement | null>(null);
 
   const displayW = Math.min(MAX_DISPLAY_WIDTH, frameSize.width);
   const displayH = Math.round(displayW * (frameSize.height / frameSize.width));
@@ -208,10 +241,11 @@ export default function AnatomyAligner({
     }
   }
 
-  // Computed once per (mask, display size) — not on every drag frame — since
-  // it's a fixed reference the anatomy layer moves over, not something that
-  // itself needs to redraw during a gesture.
-  const outlineCanvas = useMemo(() => (maskImg ? buildMaskOutline(maskImg, displayW, displayH) : null), [maskImg, displayW, displayH]);
+  // The mask image is decoded to a flat grey array once per (mask, display
+  // size) — not on every drag frame — and reused both for the target-outline
+  // trace and for gating the live anatomy-layer preview below.
+  const maskGray = useMemo(() => (maskImg ? readMaskGray(maskImg, displayW, displayH) : null), [maskImg, displayW, displayH]);
+  const outlineCanvas = useMemo(() => (maskGray ? buildMaskOutline(maskGray, displayW, displayH) : null), [maskGray, displayW, displayH]);
   const splitHalves = useMemo(() => (splitMode ? buildSplitHalves(anatomyImg, splitY) : null), [splitMode, anatomyImg, splitY]);
 
   useEffect(() => {
@@ -223,9 +257,22 @@ export default function AnatomyAligner({
 
     function drawLayer(layer: CanvasImageSource, layerAdjust: ManualAdjust, layerOpacity: number) {
       const full = composeManualAdjustment(baseTransform, layerAdjust, { x: pivotX, y: pivotY });
-      ctx.save();
-      ctx.globalAlpha = layerOpacity;
-      ctx.setTransform(
+
+      // Render the transformed layer onto a scratch canvas first, so its
+      // alpha can be gated by the real mask before it ever reaches the
+      // visible canvas — matching exactly what the server's export
+      // compositing does, instead of the old flat "see-through" opacity
+      // that made any opaque anatomy pixel look like guaranteed coverage.
+      let scratch = maskScratchRef.current;
+      if (!scratch) {
+        scratch = document.createElement("canvas");
+        maskScratchRef.current = scratch;
+      }
+      scratch.width = displayW;
+      scratch.height = displayH;
+      const sctx = scratch.getContext("2d")!;
+      sctx.save();
+      sctx.setTransform(
         full.a * displayScale,
         full.b * displayScale,
         full.c * displayScale,
@@ -233,7 +280,16 @@ export default function AnatomyAligner({
         full.tx * displayScale,
         full.ty * displayScale,
       );
-      ctx.drawImage(layer, 0, 0);
+      sctx.drawImage(layer, 0, 0);
+      sctx.restore();
+
+      if (maskGray) {
+        applyMaskGate(scratch, maskGray);
+      }
+
+      ctx.save();
+      ctx.globalAlpha = layerOpacity;
+      ctx.drawImage(scratch, 0, 0);
       ctx.restore();
     }
 
@@ -265,6 +321,7 @@ export default function AnatomyAligner({
     anatomyImg,
     baseTransform,
     outlineCanvas,
+    maskGray,
     displayW,
     displayH,
     displayScale,
@@ -377,6 +434,7 @@ export default function AnatomyAligner({
       <p className="muted" style={{ marginTop: 0 }}>
         Drag with one finger to move, pinch with two fingers to resize/rotate — dress the anatomy layer exactly onto the body below it.
         {outlineCanvas && " Fit it inside the yellow outline — that's the real body boundary from this exact frame."}
+        {maskGray && " This preview already applies the real mask: any spot where the anatomy layer looks faded or missing is a spot the export will also leave as original footage, not a rendering gap."}
       </p>
       <canvas
         ref={canvasRef}

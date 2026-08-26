@@ -724,6 +724,70 @@ explanation, and adds a fourth independent resolution/scenario (after the
 single-keyframe, two-keyframe, and split-alignment checks above) where the
 alignment-to-export chain has been verified pixel-exact.
 
+### The preview didn't show what the mask would actually keep
+
+The next report was the most specific one yet: a real frame from the
+user's own exported video, with a region circled by hand — the side of the
+torso next to a bent arm — showing bare skin instead of anatomy texture,
+despite the user's own words that "in my edit it fully dresses there."
+That's a precise, falsifiable claim: full coverage during alignment, a gap
+in the export, same spot.
+
+Reading `AnatomyAligner.tsx`'s draw effect end to end turned up the actual
+cause, and it wasn't in the export path at all (already verified correct
+multiple times over, above): the live preview never applied the real
+segmentation mask. It only ever composited the frame and the anatomy layer
+with a single global "see-through" `opacity` slider — meant purely as a
+positioning aid, so the frame underneath stays visible while dragging. The
+server's real export compositing (`compositing.ts`'s `blendFrame`), by
+contrast, always gates every anatomy pixel by that exact pixel's mask
+confidence, and correctly falls back to the original frame wherever the
+mask isn't confident that spot is body — exactly the kind of spot a
+self-occluded armpit next to a bent arm produces. So during alignment, any
+region where the raw anatomy image itself had opaque pixels *looked* like
+guaranteed coverage, regardless of what the mask would later allow through
+at export. The user wasn't imagining a mismatch — the preview was
+genuinely lying to them about what would export, in one specific,
+reproducible way.
+
+Fixed by making the preview apply the same rule the export does. Each
+anatomy layer (the single image in normal mode, or each half independently
+in split mode) is now rendered onto an offscreen canvas at full alpha
+first, exactly as before, and then has its alpha multiplied pixel-by-pixel
+by the real mask's confidence at that same spot (`applyMaskGate`, reusing
+the same greyscale decode — `readMaskGray` — that the target-boundary
+outline already relied on, so the mask image is still only decoded once
+per mask/display-size, not on every drag frame) before it's drawn onto the
+visible canvas at the user's chosen see-through opacity. A short line was
+added to the aligner's own instructions so this isn't just a silent
+behavior change: "This preview already applies the real mask: any spot
+where the anatomy layer looks faded or missing is a spot the export will
+also leave as original footage, not a rendering gap." This is a
+preview-only change — `anatomyFit.ts`'s `placeAnatomyManually` /
+`placeAnatomyManuallySplit` (what actually gets uploaded and exported) and
+the server's own compositing were already correct and were not touched.
+
+**Verified directly against the live preview, not just the export**: a
+solid, fully-opaque test anatomy image was scaled up in the real running
+aligner until it covered the entire canvas — both inside and outside the
+mock mask's ellipse — with the see-through slider at maximum, then the
+canvas's actual pixels were read straight off it (`getImageData`, no
+export/video round-trip, since both the old bug and the fix live entirely
+in this client-side rendering step). Inside the mask, the point read pure
+anatomy color, confirming coverage still shows through where the mask
+allows it. Outside the mask, the point read the exact original frame color
+— not a dimmed or partially-green blend, but the literal unmixed frame
+pixel — proving the preview's alpha is now being zeroed by the mask the
+same way export zeroes it, instead of just dimmed by the flat opacity
+slider as before. The existing single-keyframe and split-alignment export
+regression tests (above) were rerun unchanged afterward and still passed
+pixel-exact, confirming this change didn't touch the actual export path.
+
+If a real gap like the circled armpit still shows up after this fix, the
+next lever is the segmentation model's confidence on that specific pose —
+now visible during alignment instead of only discovered after export — not
+the alignment or export pipeline itself.
+
 ## Anatomy Slides mode
 
 A fourth mode, added after direct user feedback that dressing the anatomy
