@@ -82,6 +82,8 @@ export interface Keyframe {
   transitionStyle: TransitionStyle;
   /** When true, export shows exactly what was manually placed for this keyframe, ignoring the real segmentation mask's own confidence (the head is still always excluded). See server/src/types.ts's Keyframe.ignoreMask. */
   ignoreMask?: boolean;
+  /** Scales the automatic head-exclusion circle's radius (1 = automatic size, unchanged). See server/src/types.ts's Keyframe.headExcludeScale. */
+  headExcludeScale?: number;
 }
 
 /** One full-frame anatomy slide in Anatomy Slides mode — see server/src/types.ts's Slide for the full picture. */

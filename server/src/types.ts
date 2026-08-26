@@ -117,6 +117,16 @@ export interface Keyframe {
    * preview didn't show what the mask would actually keep" section.
    */
   ignoreMask?: boolean;
+  /**
+   * Scales the automatic head-exclusion circle's radius for this keyframe
+   * (default 1 = unchanged). The circle keeps the real head/face visible
+   * (see compositing.ts's excludeHeadFromMask), sized from pose keypoints —
+   * a heuristic that isn't always right for a given camera framing;
+   * confirmed directly from a real export where the default circle ate
+   * into the neck instead of stopping at the head. Below 1 shrinks it,
+   * above 1 grows it.
+   */
+  headExcludeScale?: number;
 }
 
 /**

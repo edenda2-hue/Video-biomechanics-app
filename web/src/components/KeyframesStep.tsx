@@ -45,6 +45,8 @@ interface KeyframeEntry {
   split: SplitManualAdjust | null;
   /** When true, this keyframe's export shows exactly what was manually placed, ignoring the real mask's own confidence (the head stays excluded regardless). See AnatomyAligner's "Ignore mask" toggle. */
   ignoreMask: boolean;
+  /** Scales the automatic head-exclusion circle's radius (1 = automatic size, unchanged). See AnatomyAligner's "Head exclusion size" slider. */
+  headExcludeScale: number;
   holdDurationSec: number;
   transitionInSec: number;
   transitionOutSec: number;
@@ -123,6 +125,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
             adjust: DEFAULT_MANUAL_ADJUST,
             split: null,
             ignoreMask: false,
+            headExcludeScale: 1,
             holdDurationSec: 3,
             transitionInSec: 0.4,
             transitionOutSec: 0.4,
@@ -187,13 +190,19 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
    * (the result of the user's drag/pinch alignment) and uploads it. No
    * pose matching, no reshaping — just placing the unmodified image.
    */
-  async function placeAndUpload(kfId: string, frameSize: { width: number; height: number }, adjust: ManualAdjust, ignoreMask: boolean) {
+  async function placeAndUpload(
+    kfId: string,
+    frameSize: { width: number; height: number },
+    adjust: ManualAdjust,
+    ignoreMask: boolean,
+    headExcludeScale: number,
+  ) {
     const raw = rawAnatomyRef.current.get(kfId);
     if (!raw) return;
     const canvas = placeAnatomyManually(raw.img, raw.rawSize, frameSize, adjust);
     const { imageUrl } = await uploadKeyframeAnatomy(sessionId, kfId, canvas.toDataURL("image/png"));
-    await updateKeyframe(sessionId, kfId, { ignoreMask });
-    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, adjust, split: null, ignoreMask });
+    await updateKeyframe(sessionId, kfId, { ignoreMask, headExcludeScale });
+    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, adjust, split: null, ignoreMask, headExcludeScale });
   }
 
   /**
@@ -207,33 +216,34 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
     frameSize: { width: number; height: number },
     split: SplitManualAdjust,
     ignoreMask: boolean,
+    headExcludeScale: number,
   ) {
     const raw = rawAnatomyRef.current.get(kfId);
     if (!raw) return;
     const canvas = placeAnatomyManuallySplit(raw.img, raw.rawSize, frameSize, split);
     const { imageUrl } = await uploadKeyframeAnatomy(sessionId, kfId, canvas.toDataURL("image/png"));
-    await updateKeyframe(sessionId, kfId, { ignoreMask });
-    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, split, ignoreMask });
+    await updateKeyframe(sessionId, kfId, { ignoreMask, headExcludeScale });
+    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, split, ignoreMask, headExcludeScale });
   }
 
-  async function handleAlignerConfirm(kf: KeyframeEntry, adjust: ManualAdjust, ignoreMask: boolean) {
+  async function handleAlignerConfirm(kf: KeyframeEntry, adjust: ManualAdjust, ignoreMask: boolean, headExcludeScale: number) {
     setAligningKfId(null);
     if (!kf.frameSize) return;
     patchKeyframe(kf.id, { busy: true });
     try {
-      await placeAndUpload(kf.id, kf.frameSize, adjust, ignoreMask);
+      await placeAndUpload(kf.id, kf.frameSize, adjust, ignoreMask, headExcludeScale);
       patchKeyframe(kf.id, { busy: false });
     } catch (e) {
       patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
     }
   }
 
-  async function handleAlignerConfirmSplit(kf: KeyframeEntry, split: SplitManualAdjust, ignoreMask: boolean) {
+  async function handleAlignerConfirmSplit(kf: KeyframeEntry, split: SplitManualAdjust, ignoreMask: boolean, headExcludeScale: number) {
     setAligningKfId(null);
     if (!kf.frameSize) return;
     patchKeyframe(kf.id, { busy: true });
     try {
-      await placeAndUploadSplit(kf.id, kf.frameSize, split, ignoreMask);
+      await placeAndUploadSplit(kf.id, kf.frameSize, split, ignoreMask, headExcludeScale);
       patchKeyframe(kf.id, { busy: false });
     } catch (e) {
       patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
@@ -356,12 +366,16 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
                     anatomyImg={raw.img}
                     anatomySize={raw.rawSize}
                     initialAdjust={kf.adjust}
-                    onConfirm={(adjust, ignoreMask) => handleAlignerConfirm(kf, adjust, ignoreMask)}
+                    onConfirm={(adjust, ignoreMask, headExcludeScale) => handleAlignerConfirm(kf, adjust, ignoreMask, headExcludeScale)}
                     onCancel={handleAlignerCancel}
                     maskImg={maskImgRef.current.get(kf.id)}
                     initialSplit={kf.split}
-                    onConfirmSplit={(split, ignoreMask) => handleAlignerConfirmSplit(kf, split, ignoreMask)}
+                    onConfirmSplit={(split, ignoreMask, headExcludeScale) =>
+                      handleAlignerConfirmSplit(kf, split, ignoreMask, headExcludeScale)
+                    }
                     initialIgnoreMask={kf.ignoreMask}
+                    pose={kf.framePose ?? undefined}
+                    initialHeadExcludeScale={kf.headExcludeScale}
                   />
                 </div>
               );

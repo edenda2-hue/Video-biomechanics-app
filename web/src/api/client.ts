@@ -259,7 +259,7 @@ export async function uploadKeyframeAnatomy(id: string, kfId: string, imagePngBa
 export async function updateKeyframe(
   id: string,
   kfId: string,
-  patch: Partial<Pick<Keyframe, "holdDurationSec" | "transitionInSec" | "transitionOutSec" | "transitionStyle" | "ignoreMask">>,
+  patch: Partial<Pick<Keyframe, "holdDurationSec" | "transitionInSec" | "transitionOutSec" | "transitionStyle" | "ignoreMask" | "headExcludeScale">>,
 ): Promise<Keyframe> {
   return handle(
     await fetch(`${BASE}/sessions/${id}/keyframes/${kfId}`, {

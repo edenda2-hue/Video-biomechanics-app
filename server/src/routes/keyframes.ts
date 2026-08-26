@@ -150,6 +150,11 @@ keyframesRouter.put("/sessions/:id/keyframes/:kfId", (req, res, next) => {
       patch.transitionStyle = req.body.transitionStyle as TransitionStyle;
     }
     if (req.body?.ignoreMask !== undefined) patch.ignoreMask = Boolean(req.body.ignoreMask);
+    if (req.body?.headExcludeScale !== undefined) {
+      const scale = Number(req.body.headExcludeScale);
+      if (!Number.isFinite(scale) || scale < 0) throw new HttpError(400, "headExcludeScale must be a non-negative number");
+      patch.headExcludeScale = scale;
+    }
 
     const holdDurationSec = patch.holdDurationSec ?? kf.holdDurationSec;
     const transitionInSec = patch.transitionInSec ?? kf.transitionInSec;
@@ -231,6 +236,7 @@ keyframesRouter.post("/sessions/:id/keyframes/export", (req, res, next) => {
               radialCenter: radialCenterFromPose(kf.pose!),
               excludeHeadPose: kf.pose,
               ignoreMask: kf.ignoreMask,
+              headExcludeScale: kf.headExcludeScale,
             },
             (fraction) =>
               setJob(key, {

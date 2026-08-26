@@ -1,12 +1,37 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import { composeManualAdjustment } from "../cv/alignment";
 import { centerFitTransform, DEFAULT_MANUAL_ADJUST, type ManualAdjust, type SplitManualAdjust } from "../cv/anatomyFit";
+import type { PoseKeypoint } from "../types";
 
 const DEFAULT_SPLIT_Y = 0.5;
+const DEFAULT_HEAD_EXCLUDE_SCALE = 1;
 
 const MAX_DISPLAY_WIDTH = 720;
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 4;
+const MIN_HEAD_EXCLUDE_SCALE = 0.2;
+const MAX_HEAD_EXCLUDE_SCALE = 2;
+
+/**
+ * Mirrors server/src/lib/compositing.ts's headExcludeCircle exactly (same
+ * formula, same 1.4 multiplier, same height*0.09 fallback) so the circle
+ * drawn here always matches what export will actually exclude — this is a
+ * live preview of a real server-side decision, not just a visual guess.
+ */
+function headExcludeCircle(
+  width: number,
+  height: number,
+  pose: PoseKeypoint[],
+  radiusScale: number,
+): { cx: number; cy: number; radius: number } | null {
+  const head = pose.find((k) => k.part === "head" && k.confidence >= 0.3);
+  if (!head) return null;
+  const neck = pose.find((k) => k.part === "neck" && k.confidence >= 0.3);
+  const cx = head.x * width;
+  const cy = head.y * height;
+  const baseRadius = neck ? Math.hypot((neck.x - head.x) * width, (neck.y - head.y) * height) * 1.4 : height * 0.09;
+  return { cx, cy, radius: baseRadius * radiusScale };
+}
 
 interface PointerPt {
   x: number;
@@ -28,7 +53,7 @@ export interface AnatomyAlignerProps {
   anatomyImg: HTMLImageElement;
   anatomySize: { width: number; height: number };
   initialAdjust: ManualAdjust;
-  onConfirm: (adjust: ManualAdjust, ignoreMask: boolean) => void;
+  onConfirm: (adjust: ManualAdjust, ignoreMask: boolean, headExcludeScale: number) => void;
   onCancel: () => void;
   /** The frame's own person-segmentation mask (greyscale, same native size as frameSize), if available — traced into a target-boundary outline over the frame so the alignment is a "fit inside the line" task instead of eyeballing it. Optional: the aligner still works without it. */
   maskImg?: HTMLImageElement;
@@ -45,13 +70,27 @@ export interface AnatomyAlignerProps {
    * rigid placement can't fix a bend-angle mismatch between the anatomy
    * image's own pose and the target frame's).
    */
-  onConfirmSplit?: (split: SplitManualAdjust, ignoreMask: boolean) => void;
+  onConfirmSplit?: (split: SplitManualAdjust, ignoreMask: boolean, headExcludeScale: number) => void;
   /**
    * Reopens the aligner with the "ignore the automatic mask" override
    * already on, if this keyframe/frame was last confirmed that way.
    * Defaults to false (the mask still gates coverage as normal).
    */
   initialIgnoreMask?: boolean;
+  /**
+   * This frame's own pose keypoints, if this mode excludes the head from
+   * the swap (Anatomy Keyframes mode only — see compositing.ts's
+   * excludeHeadFromMask). When provided, the aligner draws the exact circle
+   * that will stay as the real, unswapped frame, and offers a slider to
+   * resize it — the circle's default size is a heuristic that isn't always
+   * right for a given camera framing (confirmed directly from a real export
+   * where it ate into the neck instead of stopping at the head). Omit
+   * entirely in modes that don't exclude the head (e.g. the single-freeze
+   * Edit flow).
+   */
+  pose?: PoseKeypoint[];
+  /** Reopens the aligner with a prior head-exclusion circle size. Defaults to 1 (the automatic size, unchanged). */
+  initialHeadExcludeScale?: number;
 }
 
 /**
@@ -165,6 +204,37 @@ function applyMaskGate(canvas: HTMLCanvasElement, gray: Uint8Array) {
   ctx.putImageData(imageData, 0, 0);
 }
 
+/**
+ * Zeroes alpha within a circular region — the live-preview counterpart of
+ * server/src/lib/compositing.ts's excludeHeadFromMask, applied here so the
+ * preview matches export exactly: the head-exclusion circle always wins,
+ * independent of the mask gate above and of the "ignore mask" override,
+ * exactly like the server always runs excludeHeadFromMask after any mask
+ * substitution. Mutates `canvas` in place.
+ */
+function zeroCircleAlpha(canvas: HTMLCanvasElement, circle: { cx: number; cy: number; radius: number }) {
+  const { cx, cy, radius } = circle;
+  const minX = Math.max(0, Math.floor(cx - radius));
+  const maxX = Math.min(canvas.width - 1, Math.ceil(cx + radius));
+  const minY = Math.max(0, Math.floor(cy - radius));
+  const maxY = Math.min(canvas.height - 1, Math.ceil(cy + radius));
+  if (maxX < minX || maxY < minY) return;
+  const w = maxX - minX + 1;
+  const h = maxY - minY + 1;
+  const ctx = canvas.getContext("2d")!;
+  const imageData = ctx.getImageData(minX, minY, w, h);
+  const data = imageData.data;
+  const rSq = radius * radius;
+  for (let y = 0; y < h; y++) {
+    const dy = minY + y - cy;
+    for (let x = 0; x < w; x++) {
+      const dx = minX + x - cx;
+      if (dx * dx + dy * dy <= rSq) data[(y * w + x) * 4 + 3] = 0;
+    }
+  }
+  ctx.putImageData(imageData, minX, minY);
+}
+
 function dist(a: PointerPt, b: PointerPt): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -201,6 +271,8 @@ export default function AnatomyAligner({
   initialSplit,
   onConfirmSplit,
   initialIgnoreMask,
+  pose,
+  initialHeadExcludeScale,
 }: AnatomyAlignerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [adjust, setAdjust] = useState<ManualAdjust>(initialAdjust);
@@ -217,6 +289,12 @@ export default function AnatomyAligner({
   // on, both the preview and the export show exactly what was placed,
   // instead of letting the mask silently carve pieces out of it.
   const [ignoreMask, setIgnoreMask] = useState(Boolean(initialIgnoreMask));
+  // Resizes the automatic "keep the real head visible" circle (Anatomy
+  // Keyframes mode only — see excludeHeadFromMask). 1 = the pose-based
+  // automatic size, unchanged. The default doesn't always match a given
+  // camera framing: confirmed directly from a real export where it ate
+  // into the neck instead of stopping at the head.
+  const [headExcludeScale, setHeadExcludeScale] = useState(initialHeadExcludeScale ?? DEFAULT_HEAD_EXCLUDE_SCALE);
   const pointersRef = useRef<Map<number, PointerPt>>(new Map());
   const gestureRef = useRef<GestureState | null>(null);
   const maskScratchRef = useRef<HTMLCanvasElement | null>(null);
@@ -260,6 +338,12 @@ export default function AnatomyAligner({
   const maskGray = useMemo(() => (maskImg ? readMaskGray(maskImg, displayW, displayH) : null), [maskImg, displayW, displayH]);
   const outlineCanvas = useMemo(() => (maskGray ? buildMaskOutline(maskGray, displayW, displayH) : null), [maskGray, displayW, displayH]);
   const splitHalves = useMemo(() => (splitMode ? buildSplitHalves(anatomyImg, splitY) : null), [splitMode, anatomyImg, splitY]);
+  // Pose coordinates are normalized [0,1], so they scale directly to
+  // display resolution without going through frame-native pixels first.
+  const headCircle = useMemo(
+    () => (pose ? headExcludeCircle(displayW, displayH, pose, headExcludeScale) : null),
+    [pose, displayW, displayH, headExcludeScale],
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -299,6 +383,12 @@ export default function AnatomyAligner({
       if (maskGray && !ignoreMask) {
         applyMaskGate(scratch, maskGray);
       }
+      // Always applied, regardless of the mask gate or "ignore mask" above —
+      // the real head/face must always show through, independent of
+      // whatever else is happening to the rest of the layer.
+      if (headCircle) {
+        zeroCircleAlpha(scratch, headCircle);
+      }
 
       ctx.save();
       ctx.globalAlpha = layerOpacity;
@@ -321,6 +411,19 @@ export default function AnatomyAligner({
     if (showTarget && outlineCanvas) {
       ctx.drawImage(outlineCanvas, 0, 0);
     }
+
+    // Traces exactly where the head-exclusion circle sits, so resizing it
+    // is "shrink the circle until it stops eating the neck," not guessing.
+    if (headCircle) {
+      ctx.save();
+      ctx.strokeStyle = "#00d4ff";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.arc(headCircle.cx, headCircle.cy, headCircle.radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
   }, [
     adjust,
     splitMode,
@@ -336,6 +439,7 @@ export default function AnatomyAligner({
     outlineCanvas,
     maskGray,
     ignoreMask,
+    headCircle,
     displayW,
     displayH,
     displayScale,
@@ -437,9 +541,9 @@ export default function AnatomyAligner({
 
   function handleConfirmClick() {
     if (splitMode && onConfirmSplit) {
-      onConfirmSplit({ splitY, upper: upperAdjust, lower: lowerAdjust }, ignoreMask);
+      onConfirmSplit({ splitY, upper: upperAdjust, lower: lowerAdjust }, ignoreMask, headExcludeScale);
     } else {
-      onConfirm(adjust, ignoreMask);
+      onConfirm(adjust, ignoreMask, headExcludeScale);
     }
   }
 
@@ -452,6 +556,8 @@ export default function AnatomyAligner({
           " This preview already applies the real mask: any spot where the anatomy layer looks faded or missing is a spot the export will also leave as original footage, not a rendering gap."}
         {maskGray && ignoreMask &&
           " Mask override is on: what you see here is exactly what will export, with no automatic fallback to original footage anywhere you've placed the anatomy layer."}
+        {headCircle &&
+          " The dashed circle is where the real head/face always stays untouched — shrink it if it's covering more than just the head."}
       </p>
       <canvas
         ref={canvasRef}
@@ -491,6 +597,20 @@ export default function AnatomyAligner({
           <label className="muted">
             <input type="checkbox" checked={ignoreMask} onChange={(e) => setIgnoreMask(e.target.checked)} /> Ignore mask — show exactly what
             I placed
+          </label>
+        )}
+        {headCircle && (
+          <label className="muted">
+            Head exclusion size
+            <br />
+            <input
+              type="range"
+              min={MIN_HEAD_EXCLUDE_SCALE}
+              max={MAX_HEAD_EXCLUDE_SCALE}
+              step={0.05}
+              value={headExcludeScale}
+              onChange={(e) => setHeadExcludeScale(Number(e.target.value))}
+            />
           </label>
         )}
       </div>

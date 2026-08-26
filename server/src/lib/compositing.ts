@@ -57,6 +57,8 @@ export interface FreezeSequenceOptions {
   radialCenter?: { cx: number; cy: number };
   /** Anatomy Keyframes mode: when set, zeroes the mask around the head (see excludeHeadFromMask) so the real head/face always shows through, only the body swaps to anatomy. */
   excludeHeadPose?: PoseKeypoint[];
+  /** Scales the automatic head-exclusion circle's radius (default 1). See excludeHeadFromMask's doc comment. */
+  headExcludeScale?: number;
   /**
    * Opt-in per-keyframe/frame override: skip the real segmentation mask
    * entirely and treat every pixel as confidently "person" (i.e. show
@@ -69,6 +71,30 @@ export interface FreezeSequenceOptions {
 }
 
 /**
+ * The exclusion circle's geometry (center + radius, in pixel space), shared
+ * between the server's actual mask-zeroing below and the client's live
+ * preview (AnatomyAligner.tsx replicates this exact formula so the circle
+ * it draws matches what export will actually exclude) — see excludeHeadFromMask's
+ * own doc comment for why this circle exists and why its default size isn't
+ * always right for a given camera framing.
+ */
+export function headExcludeCircle(
+  width: number,
+  height: number,
+  pose: PoseKeypoint[],
+  radiusScale = 1,
+): { cx: number; cy: number; radius: number } | null {
+  const head = pose.find((k) => k.part === "head" && k.confidence >= 0.3);
+  if (!head) return null;
+  const neck = pose.find((k) => k.part === "neck" && k.confidence >= 0.3);
+
+  const cx = head.x * width;
+  const cy = head.y * height;
+  const baseRadius = neck ? Math.hypot((neck.x - head.x) * width, (neck.y - head.y) * height) * 1.4 : height * 0.09;
+  return { cx, cy, radius: baseRadius * radiusScale };
+}
+
+/**
  * Zeroes a circular region of a raw greyscale mask buffer around the head,
  * in place, so downstream compositing (`m = maskBuf[p]/255 * alpha`) always
  * leaves that area as the literal original pixels regardless of anatomy
@@ -78,17 +104,23 @@ export interface FreezeSequenceOptions {
  * circle from); no-ops entirely if the head itself isn't confidently
  * detected. Mutates and returns the same buffer (not a copy) — callers
  * that need the original mask preserved should pass in a copy.
+ *
+ * `radiusScale` (default 1, i.e. unchanged) lets the user shrink/grow this
+ * automatic circle when the pose-based default doesn't match a specific
+ * camera framing — confirmed directly from a real export where the default
+ * circle ate into the neck/collarbone instead of stopping at the head, a
+ * miscalibration this heuristic can't reliably avoid for every shot.
  */
-export function excludeHeadFromMask<T extends Uint8Array>(maskBuf: T, width: number, height: number, pose: PoseKeypoint[]): T {
-  const head = pose.find((k) => k.part === "head" && k.confidence >= 0.3);
-  if (!head) return maskBuf;
-  const neck = pose.find((k) => k.part === "neck" && k.confidence >= 0.3);
-
-  const cx = head.x * width;
-  const cy = head.y * height;
-  const radius = neck
-    ? Math.hypot((neck.x - head.x) * width, (neck.y - head.y) * height) * 1.4
-    : height * 0.09;
+export function excludeHeadFromMask<T extends Uint8Array>(
+  maskBuf: T,
+  width: number,
+  height: number,
+  pose: PoseKeypoint[],
+  radiusScale = 1,
+): T {
+  const circle = headExcludeCircle(width, height, pose, radiusScale);
+  if (!circle) return maskBuf;
+  const { cx, cy, radius } = circle;
 
   const rSq = radius * radius;
   const minY = Math.max(0, Math.floor(cy - radius));
@@ -134,7 +166,7 @@ export async function buildFreezeSequence(
   let maskBuf = opts.ignoreMask
     ? Buffer.alloc(width * height, 255)
     : await sharp(maskPath).resize(width, height).greyscale().raw().toBuffer(); // 1 channel, 0-255
-  if (opts.excludeHeadPose) maskBuf = excludeHeadFromMask(maskBuf, width, height, opts.excludeHeadPose);
+  if (opts.excludeHeadPose) maskBuf = excludeHeadFromMask(maskBuf, width, height, opts.excludeHeadPose, opts.headExcludeScale);
 
   const inFrames = Math.max(1, Math.round(fps * transitionInSec));
   const holdFrames = Math.max(1, Math.round(fps * holdSec));

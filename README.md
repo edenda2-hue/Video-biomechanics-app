@@ -845,6 +845,67 @@ now shows too, since there's no longer a mask checking the placement
 against reality. That's the deliberate tradeoff of trusting a careful
 manual alignment over an uncertain automatic one, not an oversight.
 
+### The real cause: a separate circle, not the mask at all
+
+The user re-tested with "Ignore mask" on, on the exact same reported frame,
+and the gap was still there — but this time with a screenshot circling a
+completely different spot than before: not the armpit, but the *neck*,
+right at the throat next to an earbud. That single detail broke the whole
+mask investigation open, because "Ignore mask" doing nothing there is
+actually conclusive: `AnatomyAligner.tsx`'s preview already proved
+(previous section) that the mask gate and the "ignore mask" override both
+work correctly and match export exactly. If turning the mask off entirely
+changes nothing at a specific spot, that spot was never being decided by
+the mask in the first place — something else is drawing there.
+
+That something else is `excludeHeadFromMask` in `compositing.ts`: every
+Anatomy Keyframes swap deliberately zeroes a circular region around the
+head so the real person's face always stays visible, by design, and — this
+is the part that made "Ignore mask" powerless against it — that circle is
+applied *after* and *independent of* the mask/override logic entirely (see
+`buildFreezeSequence`: `excludeHeadFromMask` runs regardless of
+`ignoreMask`). The circle's size is a heuristic sized from pose keypoints
+(`Math.hypot(neck - head) * 1.4`, or a fixed fraction of frame height when
+the neck isn't confidently detected) — reasonable on average, but nothing
+guarantees it's right for every camera angle and zoom level. On this real
+shot, it was too large and ate into the neck/collarbone, immediately below
+where the real head-exclusion boundary needs to be.
+
+The fix, same philosophy as the mask override before it: make the circle's
+size a manual, user-adjustable control instead of trusting the heuristic
+blindly. `excludeHeadFromMask` and a new shared `headExcludeCircle` (the
+same center/radius formula, factored out so the server's actual mask-
+zeroing and the client's live preview can never drift apart) both take a
+`radiusScale` multiplier, default `1` (today's unchanged behavior).
+`AnatomyAligner.tsx` gained a "Head exclusion size" slider (0.2x–2x) and
+draws the exact circle — dashed, always visible when this mode passes a
+`pose` prop — directly on the canvas, so shrinking it is "watch the circle
+get smaller until it clears the neck," not guessing at a number. The
+circle is enforced in the live preview with the same rule as export
+(`zeroCircleAlpha`, mirroring `excludeHeadFromMask`'s pixel math, applied
+*after* the mask gate/override — matching the server's own ordering
+exactly), so what's shown while aligning is what will export, same
+guarantee as every other preview fix in this document. Only Anatomy
+Keyframes carries this at all — the single-freeze Edit flow never excludes
+the head in the first place, so it never needed this control.
+
+**Verified against a real exported video, not just the preview**: using
+the mock pose's own head/neck keypoints (400x300 frame, head at (200,36),
+neck at (200,60) → default radius ≈33.6px, reaching down to y≈70 — past the
+neck), a point at (200,65) sits inside the default circle. With the slider
+at its default (1x), that point stayed original footage, as expected. After
+shrinking the slider to its minimum (0.2x, radius ≈6.7px), the same point
+in the *live preview* switched to the anatomy color, and after a full
+export → download → frame-extract round-trip, the same pixel in the real
+video file was the anatomy color too — proving the slider's value survives
+upload, storage, and server-side compositing, not just the preview canvas.
+A second check confirmed the head's own center pixel stayed excluded even
+at the slider's minimum, so shrinking it doesn't remove the protection
+entirely, only its oversized margin. All four prior regression tests
+(single-keyframe, split-alignment, masked-preview, ignore-mask) were rerun
+immediately after and still passed pixel-exact, confirming the default
+(scale 1, today's existing behavior) path is untouched.
+
 ## Anatomy Slides mode
 
 A fourth mode, added after direct user feedback that dressing the anatomy
