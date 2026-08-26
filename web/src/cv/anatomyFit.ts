@@ -56,3 +56,72 @@ export function placeAnatomyManually(
   const full = composeManualAdjustment(base, manualAdjust, pivot);
   return warpImageToCanvas(rawImage, full, targetSize.width, targetSize.height);
 }
+
+/**
+ * A single whole-image rigid placement can never perfectly match a body
+ * whose pose (bend at the hip/knee/elbow) differs from the anatomy image's
+ * own pose, even slightly: position/scale/rotation move the image as one
+ * rigid piece, so aligning one region (say the shoulders) necessarily
+ * misaligns another (the hips) if the two images bend at different angles
+ * — there is no single rigid transform that fixes both at once. This
+ * doesn't reshape or bend anything automatically (still not acceptable per
+ * the same reasoning as above) — it gives the user a second, independent
+ * rigid placement for the lower body, entirely their own to position, so a
+ * bend mismatch can be corrected by hand instead of being mathematically
+ * impossible to fix with one placement.
+ */
+export interface SplitManualAdjust {
+  /** Normalized [0,1] vertical position, in the *raw anatomy image's own* pixel space, where it's cut into upper/lower halves. */
+  splitY: number;
+  upper: ManualAdjust;
+  lower: ManualAdjust;
+}
+
+/** Cuts `rawImage` into two horizontal pieces at `splitY` (its own pixel space) — each transparent outside its own half — so they can be positioned independently. */
+function splitImageHalves(
+  rawImage: HTMLImageElement,
+  rawSize: { width: number; height: number },
+  splitY: number,
+): { upper: HTMLCanvasElement; lower: HTMLCanvasElement } {
+  const { width, height } = rawSize;
+  const cutPx = Math.round(height * splitY);
+  function half(y0: number, y1: number): HTMLCanvasElement {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(rawImage, 0, 0);
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.fillRect(0, y0, width, y1 - y0);
+    ctx.globalCompositeOperation = "source-over";
+    return canvas;
+  }
+  return { upper: half(0, cutPx), lower: half(cutPx, height) };
+}
+
+/** Split-placement counterpart to `placeAnatomyManually`: the upper and lower halves each get the neutral center-fit starting point plus their own independent manual adjustment. */
+export function placeAnatomyManuallySplit(
+  rawImage: HTMLImageElement,
+  rawSize: { width: number; height: number },
+  targetSize: { width: number; height: number },
+  split: SplitManualAdjust,
+): HTMLCanvasElement {
+  const halves = splitImageHalves(rawImage, rawSize, split.splitY);
+  const base = centerFitTransform(rawSize, targetSize);
+  const pivot = { x: targetSize.width / 2, y: targetSize.height / 2 };
+
+  const canvas = document.createElement("canvas");
+  canvas.width = targetSize.width;
+  canvas.height = targetSize.height;
+  const ctx = canvas.getContext("2d")!;
+  for (const [layer, adjust] of [
+    [halves.upper, split.upper],
+    [halves.lower, split.lower],
+  ] as const) {
+    const full = composeManualAdjustment(base, adjust, pivot);
+    ctx.setTransform(full.a, full.b, full.c, full.d, full.tx, full.ty);
+    ctx.drawImage(layer, 0, 0);
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  return canvas;
+}

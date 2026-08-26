@@ -9,7 +9,7 @@ import {
   uploadKeyframeAnatomy,
   type ExportJobStatus,
 } from "../api/client";
-import { DEFAULT_MANUAL_ADJUST, placeAnatomyManually, type ManualAdjust } from "../cv/anatomyFit";
+import { DEFAULT_MANUAL_ADJUST, placeAnatomyManually, placeAnatomyManuallySplit, type ManualAdjust, type SplitManualAdjust } from "../cv/anatomyFit";
 import { useJobPolling } from "../hooks/useJobPolling";
 import { detectPose } from "../cv/pose";
 import { segmentPerson } from "../cv/segmentation";
@@ -41,6 +41,8 @@ interface KeyframeEntry {
   frameSize: { width: number; height: number } | null;
   anatomyImageUrl: string | null;
   adjust: ManualAdjust;
+  /** Set when this keyframe was last confirmed with the upper/lower body positioned independently; null means the single whole-image `adjust` above is what's in effect. */
+  split: SplitManualAdjust | null;
   holdDurationSec: number;
   transitionInSec: number;
   transitionOutSec: number;
@@ -117,6 +119,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
             frameSize,
             anatomyImageUrl: null,
             adjust: DEFAULT_MANUAL_ADJUST,
+            split: null,
             holdDurationSec: 3,
             transitionInSec: 0.4,
             transitionOutSec: 0.4,
@@ -139,7 +142,7 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
 
   async function handleAnatomyFile(kf: KeyframeEntry, file: File) {
     if (!kf.frameSize) return;
-    patchKeyframe(kf.id, { busy: true, error: null, adjust: DEFAULT_MANUAL_ADJUST });
+    patchKeyframe(kf.id, { busy: true, error: null, adjust: DEFAULT_MANUAL_ADJUST, split: null });
     try {
       const url = URL.createObjectURL(file);
       const img = await loadImage(url);
@@ -186,7 +189,21 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
     if (!raw) return;
     const canvas = placeAnatomyManually(raw.img, raw.rawSize, frameSize, adjust);
     const { imageUrl } = await uploadKeyframeAnatomy(sessionId, kfId, canvas.toDataURL("image/png"));
-    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, adjust });
+    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, adjust, split: null });
+  }
+
+  /**
+   * Split-mode counterpart to placeAndUpload: the upper and lower body were
+   * positioned independently (see AnatomyAligner/anatomyFit.ts's doc
+   * comments for why — a single rigid placement can't fix a bend-angle
+   * mismatch between the anatomy image and this exact frame).
+   */
+  async function placeAndUploadSplit(kfId: string, frameSize: { width: number; height: number }, split: SplitManualAdjust) {
+    const raw = rawAnatomyRef.current.get(kfId);
+    if (!raw) return;
+    const canvas = placeAnatomyManuallySplit(raw.img, raw.rawSize, frameSize, split);
+    const { imageUrl } = await uploadKeyframeAnatomy(sessionId, kfId, canvas.toDataURL("image/png"));
+    patchKeyframe(kfId, { anatomyImageUrl: imageUrl, split });
   }
 
   async function handleAlignerConfirm(kf: KeyframeEntry, adjust: ManualAdjust) {
@@ -195,6 +212,18 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
     patchKeyframe(kf.id, { busy: true });
     try {
       await placeAndUpload(kf.id, kf.frameSize, adjust);
+      patchKeyframe(kf.id, { busy: false });
+    } catch (e) {
+      patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  async function handleAlignerConfirmSplit(kf: KeyframeEntry, split: SplitManualAdjust) {
+    setAligningKfId(null);
+    if (!kf.frameSize) return;
+    patchKeyframe(kf.id, { busy: true });
+    try {
+      await placeAndUploadSplit(kf.id, kf.frameSize, split);
       patchKeyframe(kf.id, { busy: false });
     } catch (e) {
       patchKeyframe(kf.id, { busy: false, error: e instanceof Error ? e.message : String(e) });
@@ -320,6 +349,8 @@ export default function KeyframesStep({ sessionId, file, metadata }: { sessionId
                     onConfirm={(adjust) => handleAlignerConfirm(kf, adjust)}
                     onCancel={handleAlignerCancel}
                     maskImg={maskImgRef.current.get(kf.id)}
+                    initialSplit={kf.split}
+                    onConfirmSplit={(split) => handleAlignerConfirmSplit(kf, split)}
                   />
                 </div>
               );

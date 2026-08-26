@@ -640,6 +640,66 @@ get that as close as it can be, not perfect regardless of the source
 image's own shape. An anatomy image cropped with a transparent background
 close to the actual body shape will benefit the most from this.
 
+### Split alignment: independent upper/lower body placement
+
+Reported directly by the user with a real exported frame: after carefully
+aligning the anatomy image, a visible pale seam still showed right at the
+hip crease of a bent-over deadlift. Investigated by extracting real frames
+from the user's own exported video (not a synthetic reproduction) and
+comparing two keyframes from the same export: an overhead-lunge keyframe
+came out essentially pixel-perfect, while the bent-over deadlift keyframe
+had the seam — same code, same pipeline (already verified correct twice
+over, in "Manual alignment" and the compositing-alpha section above), so
+the difference had to be in what a single placement can and can't
+represent geometrically, not a bug.
+
+The diagnosis: a rigid placement (offset + scale + rotation, applied to
+the *whole* image as one piece) can only ever match a body whose pose
+exactly matches the anatomy image's own pose. The moment the two poses
+bend differently — a standing anatomy reference against this frame's
+forward-bent deadlift, or even a subtly different bend angle from an
+AI-generated image that was *supposed* to match — there is no single
+rigid transform that aligns both the shoulders and the hips at once:
+fixing one necessarily throws off the other, since bending is a
+non-rigid deformation and a rigid transform cannot represent it. No
+amount of *more careful* dragging fixes this; it's a ceiling built into
+having exactly one placement.
+
+Given the standing instruction that the app must never reshape or
+auto-warp the uploaded image, the fix keeps that guarantee and adds a
+second independent placement instead of any automatic bending:
+`AnatomyAligner.tsx` now offers an opt-in "Split into upper/lower body"
+toggle. Enabling it cuts the raw anatomy image into two pieces at an
+adjustable horizontal line (`splitImageHalves`/`buildSplitHalves` — each
+half rendered onto its own full-size canvas with the other half made
+transparent via `destination-in`, so no pixel data is altered, only which
+half is visible), and the user drags/pinches each half *independently* —
+an "Editing: upper body" / "Editing: lower body" toggle picks which one
+the current gesture affects, with the inactive half dimmed so it's always
+clear which one will move. Confirming composites both halves onto one
+final image with their own transforms
+(`anatomyFit.ts`'s `placeAnatomyManuallySplit`) — from the server's
+perspective this is still just one flat PNG upload, identical interface to
+non-split mode, so no server changes were needed at all.
+
+**Verified with a real two-color test image (top half red, bottom half
+blue) through the actual UI**: a pinch/pan on the upper half only, a
+*different* pan on the lower half, confirm, export, then check specific
+pixels in the real downloaded video against hand-derived predictions of
+where each half's independent transform should place it. First attempt
+showed "failures" that turned out to be the test's own mistake, not a real
+bug — the sample points happened to land inside Anatomy Keyframes mode's
+intentional head-exclusion circle (the real head must always show through,
+by design) and outside the mock segmentation mask's ellipse in one case;
+once the sample points were corrected to sit inside the mask, outside the
+head-exclusion zone, and inside each half's actual predicted region, both
+halves showed up exactly where predicted, and the gap between them
+correctly fell back to the original frame (the alpha fix from the
+compositing section above, working correctly with two independently
+transformed layers too). Wired into both `KeyframesStep.tsx` and
+`EditStep.tsx`, since both share `AnatomyAligner` and both can hit the
+same bend-angle ceiling.
+
 ## Anatomy Slides mode
 
 A fourth mode, added after direct user feedback that dressing the anatomy

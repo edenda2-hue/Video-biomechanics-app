@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import { composeManualAdjustment } from "../cv/alignment";
-import { centerFitTransform, DEFAULT_MANUAL_ADJUST, type ManualAdjust } from "../cv/anatomyFit";
+import { centerFitTransform, DEFAULT_MANUAL_ADJUST, type ManualAdjust, type SplitManualAdjust } from "../cv/anatomyFit";
+
+const DEFAULT_SPLIT_Y = 0.5;
 
 const MAX_DISPLAY_WIDTH = 720;
 const MIN_SCALE = 0.2;
@@ -30,6 +32,20 @@ export interface AnatomyAlignerProps {
   onCancel: () => void;
   /** The frame's own person-segmentation mask (greyscale, same native size as frameSize), if available — traced into a target-boundary outline over the frame so the alignment is a "fit inside the line" task instead of eyeballing it. Optional: the aligner still works without it. */
   maskImg?: HTMLImageElement;
+  /**
+   * Reopens the aligner already in split mode with prior state, if this
+   * keyframe/frame was last confirmed split. When absent, the aligner opens
+   * in normal (single, whole-image) mode.
+   */
+  initialSplit?: SplitManualAdjust | null;
+  /**
+   * Called instead of `onConfirm` when the user confirms while in split
+   * mode (upper/lower body positioned independently — see anatomyFit.ts's
+   * `placeAnatomyManuallySplit` doc comment for why this exists: a single
+   * rigid placement can't fix a bend-angle mismatch between the anatomy
+   * image's own pose and the target frame's).
+   */
+  onConfirmSplit?: (split: SplitManualAdjust) => void;
 }
 
 /**
@@ -92,6 +108,25 @@ function buildMaskOutline(maskImg: HTMLImageElement, width: number, height: numb
   return out;
 }
 
+/** Cuts `img` into upper/lower halves at `splitY` (the image's own pixel space) — each transparent outside its own half. Mirrors anatomyFit.ts's splitImageHalves (kept private there); duplicated here at display resolution since the aligner also needs a live preview of the split, not just the final export composite. */
+function buildSplitHalves(img: HTMLImageElement, splitY: number): { upper: HTMLCanvasElement; lower: HTMLCanvasElement } {
+  const width = img.naturalWidth;
+  const height = img.naturalHeight;
+  const cutPx = Math.round(height * splitY);
+  function half(y0: number, y1: number): HTMLCanvasElement {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(img, 0, 0);
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.fillRect(0, y0, width, y1 - y0);
+    ctx.globalCompositeOperation = "source-over";
+    return canvas;
+  }
+  return { upper: half(0, cutPx), lower: half(cutPx, height) };
+}
+
 function dist(a: PointerPt, b: PointerPt): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -125,9 +160,16 @@ export default function AnatomyAligner({
   onConfirm,
   onCancel,
   maskImg,
+  initialSplit,
+  onConfirmSplit,
 }: AnatomyAlignerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [adjust, setAdjust] = useState<ManualAdjust>(initialAdjust);
+  const [splitMode, setSplitMode] = useState(Boolean(initialSplit));
+  const [splitY, setSplitY] = useState(initialSplit?.splitY ?? DEFAULT_SPLIT_Y);
+  const [activeRegion, setActiveRegion] = useState<"upper" | "lower">("upper");
+  const [upperAdjust, setUpperAdjust] = useState<ManualAdjust>(initialSplit?.upper ?? initialAdjust);
+  const [lowerAdjust, setLowerAdjust] = useState<ManualAdjust>(initialSplit?.lower ?? initialAdjust);
   const [opacity, setOpacity] = useState(0.65);
   const [showTarget, setShowTarget] = useState(true);
   const pointersRef = useRef<Map<number, PointerPt>>(new Map());
@@ -140,10 +182,37 @@ export default function AnatomyAligner({
   const pivotY = frameSize.height / 2;
   const baseTransform = centerFitTransform(anatomySize, frameSize);
 
+  // The adjust the current gesture reads/writes — the single whole-image
+  // one in normal mode, or whichever half is "active" in split mode.
+  function getCurrentAdjust(): ManualAdjust {
+    if (!splitMode) return adjust;
+    return activeRegion === "upper" ? upperAdjust : lowerAdjust;
+  }
+  function setCurrentAdjust(next: ManualAdjust) {
+    if (!splitMode) {
+      setAdjust(next);
+    } else if (activeRegion === "upper") {
+      setUpperAdjust(next);
+    } else {
+      setLowerAdjust(next);
+    }
+  }
+
+  function toggleSplitMode(next: boolean) {
+    setSplitMode(next);
+    if (next) {
+      // Start both halves from wherever the single placement currently is,
+      // so turning split mode on doesn't visually jump.
+      setUpperAdjust(adjust);
+      setLowerAdjust(adjust);
+    }
+  }
+
   // Computed once per (mask, display size) — not on every drag frame — since
   // it's a fixed reference the anatomy layer moves over, not something that
   // itself needs to redraw during a gesture.
   const outlineCanvas = useMemo(() => (maskImg ? buildMaskOutline(maskImg, displayW, displayH) : null), [maskImg, displayW, displayH]);
+  const splitHalves = useMemo(() => (splitMode ? buildSplitHalves(anatomyImg, splitY) : null), [splitMode, anatomyImg, splitY]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -152,19 +221,30 @@ export default function AnatomyAligner({
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(frameImg, 0, 0, displayW, displayH);
 
-    const full = composeManualAdjustment(baseTransform, adjust, { x: pivotX, y: pivotY });
-    ctx.save();
-    ctx.globalAlpha = opacity;
-    ctx.setTransform(
-      full.a * displayScale,
-      full.b * displayScale,
-      full.c * displayScale,
-      full.d * displayScale,
-      full.tx * displayScale,
-      full.ty * displayScale,
-    );
-    ctx.drawImage(anatomyImg, 0, 0);
-    ctx.restore();
+    function drawLayer(layer: CanvasImageSource, layerAdjust: ManualAdjust, layerOpacity: number) {
+      const full = composeManualAdjustment(baseTransform, layerAdjust, { x: pivotX, y: pivotY });
+      ctx.save();
+      ctx.globalAlpha = layerOpacity;
+      ctx.setTransform(
+        full.a * displayScale,
+        full.b * displayScale,
+        full.c * displayScale,
+        full.d * displayScale,
+        full.tx * displayScale,
+        full.ty * displayScale,
+      );
+      ctx.drawImage(layer, 0, 0);
+      ctx.restore();
+    }
+
+    if (!splitMode) {
+      drawLayer(anatomyImg, adjust, opacity);
+    } else if (splitHalves) {
+      // The inactive half is dimmed further so it's always visually clear
+      // which region the current gesture will move.
+      drawLayer(splitHalves.upper, upperAdjust, activeRegion === "upper" ? opacity : opacity * 0.5);
+      drawLayer(splitHalves.lower, lowerAdjust, activeRegion === "lower" ? opacity : opacity * 0.5);
+    }
 
     // Drawn last, always at full opacity, independent of the see-through
     // slider above — a fixed target boundary to fit the anatomy layer
@@ -172,7 +252,25 @@ export default function AnatomyAligner({
     if (showTarget && outlineCanvas) {
       ctx.drawImage(outlineCanvas, 0, 0);
     }
-  }, [adjust, opacity, showTarget, frameImg, anatomyImg, baseTransform, outlineCanvas, displayW, displayH, displayScale, pivotX, pivotY]);
+  }, [
+    adjust,
+    splitMode,
+    splitHalves,
+    upperAdjust,
+    lowerAdjust,
+    activeRegion,
+    opacity,
+    showTarget,
+    frameImg,
+    anatomyImg,
+    baseTransform,
+    outlineCanvas,
+    displayW,
+    displayH,
+    displayScale,
+    pivotX,
+    pivotY,
+  ]);
 
   function canvasPoint(e: PointerEvent<HTMLCanvasElement>): PointerPt {
     const canvas = canvasRef.current!;
@@ -212,7 +310,7 @@ export default function AnatomyAligner({
       // ignore — see comment above
     }
     pointersRef.current.set(e.pointerId, canvasPoint(e));
-    resetGesture(adjust);
+    resetGesture(getCurrentAdjust());
   }
 
   function handlePointerMove(e: PointerEvent<HTMLCanvasElement>) {
@@ -223,7 +321,7 @@ export default function AnatomyAligner({
 
     if (gesture.mode === "pan") {
       const pt = pointersRef.current.get(e.pointerId)!;
-      setAdjust({
+      setCurrentAdjust({
         ...gesture.startAdjust,
         offsetX: gesture.startAdjust.offsetX + (pt.x - gesture.startMid.x) / displayScale,
         offsetY: gesture.startAdjust.offsetY + (pt.y - gesture.startMid.y) / displayScale,
@@ -237,7 +335,7 @@ export default function AnatomyAligner({
       const curMid = midpoint(a, b);
       const scaleFactor = gesture.startDist > 0 ? curDist / gesture.startDist : 1;
       const angleDeltaDeg = ((curAngle - gesture.startAngle) * 180) / Math.PI;
-      setAdjust({
+      setCurrentAdjust({
         offsetX: gesture.startAdjust.offsetX + (curMid.x - gesture.startMid.x) / displayScale,
         offsetY: gesture.startAdjust.offsetY + (curMid.y - gesture.startMid.y) / displayScale,
         scale: clamp(gesture.startAdjust.scale * scaleFactor, MIN_SCALE, MAX_SCALE),
@@ -248,12 +346,30 @@ export default function AnatomyAligner({
 
   function handlePointerUp(e: PointerEvent<HTMLCanvasElement>) {
     pointersRef.current.delete(e.pointerId);
-    resetGesture(adjust);
+    resetGesture(getCurrentAdjust());
   }
 
   function handleWheel(e: WheelEvent<HTMLCanvasElement>) {
     e.preventDefault();
-    setAdjust((a) => ({ ...a, scale: clamp(a.scale * (1 - e.deltaY * 0.001), MIN_SCALE, MAX_SCALE) }));
+    setCurrentAdjust({ ...getCurrentAdjust(), scale: clamp(getCurrentAdjust().scale * (1 - e.deltaY * 0.001), MIN_SCALE, MAX_SCALE) });
+  }
+
+  function handleResetClick() {
+    if (!splitMode) {
+      setAdjust(DEFAULT_MANUAL_ADJUST);
+    } else if (activeRegion === "upper") {
+      setUpperAdjust(DEFAULT_MANUAL_ADJUST);
+    } else {
+      setLowerAdjust(DEFAULT_MANUAL_ADJUST);
+    }
+  }
+
+  function handleConfirmClick() {
+    if (splitMode && onConfirmSplit) {
+      onConfirmSplit({ splitY, upper: upperAdjust, lower: lowerAdjust });
+    } else {
+      onConfirm(adjust);
+    }
   }
 
   return (
@@ -288,8 +404,8 @@ export default function AnatomyAligner({
           <br />
           <input type="range" min={0.3} max={1} step={0.05} value={opacity} onChange={(e) => setOpacity(Number(e.target.value))} />
         </label>
-        <button type="button" className="secondary" onClick={() => setAdjust(DEFAULT_MANUAL_ADJUST)}>
-          Reset alignment
+        <button type="button" className="secondary" onClick={handleResetClick}>
+          Reset {splitMode ? (activeRegion === "upper" ? "upper" : "lower") : "alignment"}
         </button>
         {outlineCanvas && (
           <label className="muted">
@@ -297,8 +413,46 @@ export default function AnatomyAligner({
           </label>
         )}
       </div>
+
+      {onConfirmSplit && (
+        <div className="row" style={{ marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <label className="muted">
+            <input type="checkbox" checked={splitMode} onChange={(e) => toggleSplitMode(e.target.checked)} /> Split into upper/lower body
+          </label>
+          {splitMode && (
+            <>
+              <button
+                type="button"
+                className={activeRegion === "upper" ? "" : "secondary"}
+                onClick={() => setActiveRegion("upper")}
+              >
+                Editing: upper body
+              </button>
+              <button
+                type="button"
+                className={activeRegion === "lower" ? "" : "secondary"}
+                onClick={() => setActiveRegion("lower")}
+              >
+                Editing: lower body
+              </button>
+              <label className="muted">
+                Split line
+                <br />
+                <input type="range" min={0.2} max={0.8} step={0.01} value={splitY} onChange={(e) => setSplitY(Number(e.target.value))} />
+              </label>
+            </>
+          )}
+        </div>
+      )}
+      {splitMode && (
+        <p className="muted" style={{ marginTop: 4 }}>
+          A single placement can't fix a bend that differs between the anatomy image and this exact frame — position the upper and lower
+          body independently instead. The dimmer half is the one you're not currently editing.
+        </p>
+      )}
+
       <div className="row" style={{ marginTop: 12 }}>
-        <button type="button" onClick={() => onConfirm(adjust)}>
+        <button type="button" onClick={handleConfirmClick}>
           Confirm this frame
         </button>
         <button type="button" className="secondary" onClick={onCancel}>

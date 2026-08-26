@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { confirmFrame, sendChatEdit, setTimeline, submitPose, uploadAnatomyImage, type TimelineState } from "../api/client";
 import { boundsCenter, verticalBounds } from "../cv/alignment";
-import { placeAnatomyManually } from "../cv/anatomyFit";
+import { placeAnatomyManually, placeAnatomyManuallySplit, type SplitManualAdjust } from "../cv/anatomyFit";
 import { detectPose } from "../cv/pose";
 import { segmentPerson } from "../cv/segmentation";
 import AnatomyAligner from "./AnatomyAligner";
@@ -39,6 +39,10 @@ export default function EditStep({
   const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null);
 
   const [adjust, setAdjust] = useState(DEFAULT_ADJUST);
+  // Set when the upper/lower body were last positioned independently (see
+  // AnatomyAligner/anatomyFit.ts's doc comments) instead of the single
+  // whole-image `adjust` above.
+  const [split, setSplit] = useState<SplitManualAdjust | null>(null);
   const [anatomyImageUrl, setAnatomyImageUrl] = useState<string | null>(null);
 
   const [timeline, setTimelineState] = useState<TimelineState>({
@@ -116,6 +120,7 @@ export default function EditStep({
       rawAnatomyImgRef.current = img;
       rawAnatomySizeRef.current = { width: img.naturalWidth, height: img.naturalHeight };
       setAdjust(DEFAULT_ADJUST);
+      setSplit(null);
       await rewarpAndUpload(DEFAULT_ADJUST, frameSize);
       setPhase("ready");
     } catch (e) {
@@ -144,6 +149,24 @@ export default function EditStep({
     setAnatomyImageUrl(imageUrl);
   }
 
+  /**
+   * Split-mode counterpart to rewarpAndUpload: the upper and lower body
+   * were positioned independently — see AnatomyAligner/anatomyFit.ts's doc
+   * comments for why (a single rigid placement can't fix a bend-angle
+   * mismatch between the anatomy image and this exact frame).
+   */
+  async function rewarpAndUploadSplit(splitAdjust: SplitManualAdjust, size: { width: number; height: number }) {
+    const img = rawAnatomyImgRef.current;
+    const rawSize = rawAnatomySizeRef.current;
+    if (!img || !rawSize) return;
+
+    const canvas = placeAnatomyManuallySplit(img, rawSize, size, splitAdjust);
+
+    const dataUrl = canvas.toDataURL("image/png");
+    const { imageUrl } = await uploadAnatomyImage(sessionId, dataUrl);
+    setAnatomyImageUrl(imageUrl);
+  }
+
   // Large touch-drag/pinch alignment surface, opened on demand instead of
   // small nudge sliders — see AnatomyAligner's doc comment for why: no
   // amount of slider-nudging beats the user directly dragging/pinching the
@@ -158,9 +181,21 @@ export default function EditStep({
   async function handleAlignerConfirm(nextAdjust: typeof DEFAULT_ADJUST) {
     setAlignerOpen(false);
     setAdjust(nextAdjust);
+    setSplit(null);
     if (!frameSize) return;
     try {
       await rewarpAndUpload(nextAdjust, frameSize);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function handleAlignerConfirmSplit(nextSplit: SplitManualAdjust) {
+    setAlignerOpen(false);
+    setSplit(nextSplit);
+    if (!frameSize) return;
+    try {
+      await rewarpAndUploadSplit(nextSplit, frameSize);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -420,6 +455,7 @@ export default function EditStep({
       const { size } = await prepareFrame(`${newUrl}&t=${Date.now()}`);
       if (rawAnatomyImgRef.current && rawAnatomySizeRef.current) {
         setAdjust(DEFAULT_ADJUST);
+        setSplit(null);
         await rewarpAndUpload(DEFAULT_ADJUST, size);
       }
       setPhase("ready");
@@ -457,6 +493,7 @@ export default function EditStep({
         const { size } = await prepareFrame(result.frameUrl);
         if (rawAnatomyImgRef.current && rawAnatomySizeRef.current) {
           setAdjust(DEFAULT_ADJUST);
+          setSplit(null);
           await rewarpAndUpload(DEFAULT_ADJUST, size);
         }
         setPhase("ready");
@@ -566,6 +603,8 @@ export default function EditStep({
                 onConfirm={handleAlignerConfirm}
                 onCancel={() => setAlignerOpen(false)}
                 maskImg={maskImgRef.current ?? undefined}
+                initialSplit={split}
+                onConfirmSplit={handleAlignerConfirmSplit}
               />
             </div>
           )}
