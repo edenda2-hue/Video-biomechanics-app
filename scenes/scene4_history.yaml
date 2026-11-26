@@ -1,0 +1,42 @@
+# Scene 4 - history & exam in the clinic (remake of scene4_history.mp4 in the AAA game look)
+id: scene4_history
+duration: 7            # final length in seconds
+gen_duration: 10       # length requested from the video model (trimmed to `duration`)
+
+characters: [PLAYER, THERAPIST_M]   # or THERAPIST_F, or a full custom description
+set: CLINIC
+
+pose: >-
+  the player sits on the edge of the treatment table, feet hanging, hands resting on the table;
+  the therapist stands beside him facing him, clipboard in hand, listening
+camera_image: mid-low angle, full body of both characters, slightly off-center, 35mm lens feel
+
+motion: >-
+  0-3s: the therapist looks up from the clipboard and asks a question with a small open-hand gesture,
+  the player listens. 3-7s: the player answers, points down toward his lower leg and Achilles area
+  with one hand and winces slightly, then shrugs; the therapist nods and writes on the clipboard.
+camera_motion: slow push-in toward both characters
+
+references:            # uploaded to the image model so faces, kit and room stay consistent
+  - refs/player_harbor8.png
+  - refs/clinic_layout.png
+audio: refs/scene4_voice.m4a
+
+grade: polish          # none | polish | restyle
+push_in: 0.0           # extra digital push-in (0.04 = 4%), the model already moves the camera
+end_card: false
+
+overlay:
+  chapter: "04 · HISTORY & EXAM"
+  bubbles:
+    - {start: 0.7, end: 4.0, text: "What happened?", x: 430, y: 215, tail: right}
+    - {start: 4.0, text: "stopped hard... ouch!", x: 60, y: 215, tail: left}
+  notes:
+    title: CASE NOTES
+    start: 3.6
+    items:
+      - {at: 4.0, text: "Onset: one braking event"}
+      - {at: 5.7, text: "Symptoms < 1 week"}
+  captions:
+    - {start: 0, end: 3.6, text: "At the clinic, the physio starts\nwith questions and a careful exam."}
+    - {start: 3.6, text: "The pain started during one specific\nbraking event, less than a week ago.\nThere is no previous Achilles pain."}
